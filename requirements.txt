@@ -1,0 +1,8 @@
+streamlit
+openai
+pillow
+requests
+python-dotenv
+fpdf2
+streamlit-extras
+streamlit-card
