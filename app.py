@@ -13,6 +13,7 @@ Run with:  streamlit run app.py
 
 import base64
 import io
+import math
 import os
 import json
 import uuid
@@ -71,6 +72,47 @@ ELEMENTS = list(ELEMENT_COLORS.keys())
 
 CUSTOM_ELEMENT_COLORS = ELEMENT_COLORS["Siding"]  # generic color list for saved custom elements
 CUSTOM_ELEMENT_STYLES = ["Keep as is", "Match existing", "Custom"]
+
+# Color + texture pickers (replace old combined-swatch approach).
+PICKER_COLORS = [
+    ("White",  "#f5f0eb"),
+    ("Beige",  "#d4bc94"),
+    ("Gray",   "#808080"),
+    ("Navy",   "#1e3a5f"),
+    ("Black",  "#1a1a1a"),
+    ("Brown",  "#6b4423"),
+    ("Green",  "#2d5a27"),
+    ("Red",    "#8b2727"),
+    ("Yellow", "#c9a84c"),
+]
+
+PICKER_TEXTURES = [
+    "Brick", "Stucco", "Wood Panels", "Cedar Shingles",
+    "Board and Batten", "Stone Veneer", "Vinyl Lap", "Metal Panel",
+]
+
+ELEMENT_TEXTURES = {
+    "Siding": [
+        "Brick", "Stucco", "Wood Panels", "Cedar Shingles",
+        "Board and Batten", "Stone Veneer", "Vinyl Lap", "Metal Panel", "Custom",
+    ],
+    "Roof": [
+        "Asphalt Shingles", "Slate Tiles", "Clay Tiles", "Metal Standing Seam",
+        "Wood Shake", "Copper", "Flat Membrane", "Custom",
+    ],
+    "Front Door": [
+        "Solid Wood", "Glass Panels", "Craftsman Style", "Arched",
+        "Modern Flat", "French Doors", "Steel", "Fiberglass", "Custom",
+    ],
+    "Shutters": [
+        "Louvered", "Board and Batten", "Raised Panel",
+        "Flat Panel", "Bahama Style", "Colonial", "Custom",
+    ],
+    "Garage Door": [
+        "Raised Panel", "Carriage Style", "Modern Flat",
+        "Full Glass", "Wood Plank", "Flush Panel", "Custom",
+    ],
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -269,17 +311,108 @@ div[data-testid="stFileUploadDropzone"] {
 div[data-testid="stFileUploadDropzone"] p {
     color:#888888 !important;
 }
+button[kind="header"] {
+    display: none !important;
+}
+[data-testid="collapsedControl"] {
+    display: none !important;
+}
+button[data-testid="baseButton-header"] {
+    display: none !important;
+}
+/* Suppress all focus rings for overlay / swatch / element buttons */
+[class*="tpick_"] button:focus,
+[class*="tpick_"] button:focus-visible,
+[class*="tpick_"] button:active {
+    outline: none !important;
+    box-shadow: none !important;
+}
+[class*="cpick_"] button:focus,
+[class*="cpick_"] button:focus-visible,
+[class*="cpick_"] button:active {
+    outline: none !important;
+    box-shadow: none !important;
+}
+[class*="eltab_"] button:focus,
+[class*="eltab_"] button:focus-visible,
+[class*="eltab_"] button:active {
+    outline: none !important;
+    box-shadow: none !important;
+    border-radius: 8px !important;
+}
+[class*="cpkeep_"] button:focus,
+[class*="cpkeep_"] button:focus-visible,
+[class*="cpkeep_"] button:active {
+    outline: none !important;
+    box-shadow: none !important;
+}
+[class*="tpkeep_"] button:focus,
+[class*="tpkeep_"] button:focus-visible,
+[class*="tpkeep_"] button:active {
+    outline: none !important;
+    box-shadow: none !important;
+}
+section[data-testid="stSidebar"] {
+    transform: none !important;
+    visibility: visible !important;
+    display: block !important;
+    min-width: 400px !important;
+    width: 400px !important;
+}
+section[data-testid="stSidebar"][aria-expanded="false"] {
+    transform: none !important;
+    margin-left: 0 !important;
+    min-width: 400px !important;
+}
 </style>
 """
 
 # Reusable stylable_container CSS snippets.
-IMAGE_FRAME_CSS = """
-{
-    background:#161616; border:1px solid rgba(201,168,76,0.30); border-radius:18px;
-    padding:16px; box-shadow:0 10px 36px rgba(0,0,0,0.55);
-}
-img { border-radius:12px; }
+# Module-level reference to the image st.empty() placeholder.
+# Set in main() before render_sidebar() runs, so run_generate() can fill it.
+_image_placeholder = None
+
+_SPINNER_HTML = """
+<div style="
+    width: 100%;
+    height: 500px;
+    background: #161616;
+    border: 2px solid rgba(201,168,76,0.70);
+    border-radius: 18px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+">
+    <style>
+    @keyframes spin {
+        0%   { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+    .gold-spinner {
+        width: 60px;
+        height: 60px;
+        border: 4px solid #2a2a2a;
+        border-top: 4px solid #c9a84c;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+    }
+    </style>
+    <div class="gold-spinner"></div>
+    <p style="color:#c9a84c; font-family:'Playfair Display',serif;
+              font-size:18px; margin:0;">Crafting your design...</p>
+</div>
 """
+
+IMAGE_FRAME_CSS = [
+    "{ background:#161616; border:1px solid rgba(201,168,76,0.30); border-radius:18px;"
+    " padding:0; overflow:hidden; box-shadow:0 10px 36px rgba(0,0,0,0.55); }",
+    "> div:first-child { margin-bottom:0 !important; }",
+    "[data-testid='stImage'] { width:100% !important; max-width:none !important; }",
+    "[data-testid='stImage'] > img { width:100% !important; max-width:none !important;"
+    " height:auto !important; border-radius:18px; display:block; }",
+]
 
 ACTIONS_CSS = """
 button {
@@ -463,15 +596,76 @@ def build_instruction(edit_history, custom_instructions):
     changes_text = "; ".join(changes) if changes else "make no visual changes"
 
     instruction = (
-        f"This is a photo of a house. {changes_text}. "
-        "Do not change anything else — preserve the exact roofline, all windows, "
-        "all doors, the lawn, the sky, the trees, the driveway, and all other "
-        "elements exactly as they are. The result must look photorealistic with "
-        "the same lighting and perspective as the original photo. "
-        "Pay special attention to keeping the lawn, grass, and landscaping completely "
-        "photorealistic and natural — do not over-saturate or stylize the greenery in any way. "
-        "Do not crop, zoom in, or change the framing of the image in any way. "
-        "Keep the exact same field of view and composition as the original photo."
+        f"SYSTEM ROLE: You are the world's most precise architectural photo retouching specialist with 30 years of experience. "
+        f"You have been hired to apply specific surface material changes to a photograph of a real house. "
+        f"You are NOT generating a new image. You are NOT creating art. You are RETOUCHING an existing photograph. "
+        f"Think of yourself as a master Photoshop retoucher who is painting new materials onto specific surfaces of an existing photograph while leaving every other pixel completely untouched. "
+        f"Your reputation depends on the output being indistinguishable from the original photograph except for the explicitly requested changes. "
+        f"\n\nTHE ONLY PERMITTED CHANGES — DO THESE AND NOTHING ELSE: {changes_text}. "
+        f"\n\nROOFLINE — ABSOLUTE PRESERVATION REQUIRED: "
+        f"Before making any changes, mentally trace the exact silhouette of the roofline in the original photo. "
+        f"Count every single roof peak, gable, dormer, hip, valley, and ridge line. "
+        f"Your output must have the exact same number of peaks in the exact same positions. "
+        f"The angle of every single roof slope must be mathematically identical to the original. "
+        f"The height of every peak relative to the rest of the house must be identical. "
+        f"The width of every gable must be identical. "
+        f"The position of every dormer must be identical. "
+        f"The length of every eave and soffit must be identical. "
+        f"The roofline silhouette when traced against the sky must be pixel-perfect identical to the original. "
+        f"Any deviation in the roofline is an automatic failure of this task. "
+        f"\n\nWINDOWS — ABSOLUTE PRESERVATION REQUIRED: "
+        f"Before making any changes, count every single window in the original photo including all upper floor windows, lower floor windows, dormer windows, garage windows, and any other windows. "
+        f"Your output must have the exact same total number of windows. "
+        f"Every window must be in the exact same position relative to the walls and other architectural elements. "
+        f"Every window must be the exact same size as in the original. "
+        f"Every window must have the exact same number of panes and muntin pattern as in the original. "
+        f"Window frames must be the exact same color and style as in the original unless explicitly asked to change them. "
+        f"The spacing between windows must be identical. "
+        f"Any window that is missing, moved, resized, or altered in any way is an automatic failure of this task. "
+        f"\n\nPORCH AND COLUMNS — ABSOLUTE PRESERVATION REQUIRED: "
+        f"The porch must be exactly the same depth, width, and height as in the original. "
+        f"Every column must be in the exact same position with the exact same diameter and height. "
+        f"The porch ceiling, beams, and any decorative elements must be identical. "
+        f"The porch floor and steps must be identical in size, shape, and material. "
+        f"\n\nGARAGE — PRESERVATION REQUIRED UNLESS EXPLICITLY ASKED TO CHANGE: "
+        f"The garage opening must be exactly the same width and height as in the original. "
+        f"The garage door panels, windows, and hardware must match the original unless explicitly asked to change the garage door. "
+        f"The garage roof line and trim must be identical. "
+        f"\n\nFRONT DOOR — PRESERVATION REQUIRED UNLESS EXPLICITLY ASKED TO CHANGE: "
+        f"The front door must be in the exact same position, the exact same size, and the exact same style as the original unless explicitly asked to change it. "
+        f"The door surround, transom, sidelights, and hardware must be identical unless explicitly asked to change them. "
+        f"\n\nFOUNDATION AND STONEWORK: "
+        f"The foundation, stone veneer, brick, or any masonry at the base of the house must be completely unchanged. "
+        f"The steps, walkway, and any hardscaping must be identical. "
+        f"The driveway shape, color, and texture must be identical. "
+        f"\n\nLANDSCAPING AND ENVIRONMENT — ZERO TOLERANCE FOR CHANGES: "
+        f"Every single tree, bush, shrub, plant, and flower must be in the exact same position with the exact same size and color. "
+        f"The lawn must be identical in color, texture, and shape. "
+        f"The sky must be identical including all clouds, blue tones, and lighting. "
+        f"The shadows on the ground and on the house must fall in exactly the same direction and intensity. "
+        f"The time of day and lighting conditions must be identical. "
+        f"\n\nSCALE, PERSPECTIVE, AND FRAMING — ABSOLUTE PRESERVATION REQUIRED: "
+        f"The house must occupy exactly the same portion of the frame as in the original. "
+        f"Do not zoom in. Do not zoom out. Do not pan left or right. Do not tilt the camera angle. "
+        f"Every architectural element must be exactly the same size relative to the image dimensions as in the original photo. "
+        f"The vanishing point and perspective lines must be identical. "
+        f"The horizon line must be in the exact same position. "
+        f"\n\nDECORATIVE ELEMENTS: "
+        f"The house number must be identical. "
+        f"All light fixtures, sconces, and exterior lighting must be identical unless explicitly asked to change them. "
+        f"The mailbox, address placard, security cameras, and any other accessories must be identical. "
+        f"All window shutters must be identical unless explicitly asked to change them. "
+        f"All trim, fascia, soffit, and gutters must be identical in color and style unless explicitly asked to change them. "
+        f"\n\nFINAL MANDATORY QUALITY VERIFICATION: "
+        f"Before producing your output, perform these verification checks: "
+        f"CHECK 1 — Roofline: Does the roofline silhouette exactly match the original? Are all peaks, gables, and dormers in the same positions? "
+        f"CHECK 2 — Windows: Are all windows present, in the same positions, and with the same number of panes? "
+        f"CHECK 3 — Scale: Is the house the same size in the frame? Is the perspective identical? "
+        f"CHECK 4 — Changes: Have ONLY the explicitly requested elements been changed? "
+        f"CHECK 5 — Environment: Are the lawn, trees, sky, and driveway completely unchanged? "
+        f"CHECK 6 — Photorealism: Does the result look like a professional architectural retouching job with realistic materials, lighting, and shadows? "
+        f"If any of these checks fail, correct the output before returning it. "
+        f"The final result must look like the original photograph with only the requested surfaces professionally repainted by a master retoucher."
     )
     return instruction
 
@@ -862,7 +1056,7 @@ def init_state():
     st.session_state.setdefault("compare_variation_ids", [])
 
     # Auxiliary UI-only keys.
-    st.session_state.setdefault("show_slider", False)
+    st.session_state.setdefault("show_before_after", False)
     st.session_state.setdefault("pdf_bytes", None)
     st.session_state.setdefault("uploaded_sig", None)
     st.session_state.setdefault("last_batch_ids", [])
@@ -877,17 +1071,15 @@ def init_state():
     }
     for element in ELEMENTS:
         anchored[f"{element}_color"] = "Keep as is"
-        anchored[f"{element}_style"] = "Keep as is"
+        anchored[f"{element}_texture"] = "Keep as is"
         anchored[f"{element}_custom_color"] = ""
-        anchored[f"{element}_custom_style"] = ""
         anchored[f"{element}_price"] = 0.0
         anchored[f"{element}_note"] = ""
     # Also anchor widget keys for any saved custom element tabs.
     for element in st.session_state.get("saved_custom_elements", []):
         anchored[f"{element}_color"] = "Keep as is"
-        anchored[f"{element}_style"] = "Keep as is"
+        anchored[f"{element}_texture"] = "Keep as is"
         anchored[f"{element}_custom_color"] = ""
-        anchored[f"{element}_custom_style"] = ""
         anchored[f"{element}_price"] = 0.0
         anchored[f"{element}_note"] = ""
     for key, default in anchored.items():
@@ -905,10 +1097,10 @@ def apply_pending_preset():
     if not pending:
         return
     element = pending["element"]
-    if pending.get("color") in ELEMENT_COLORS.get(element, []):
+    if pending.get("color"):
         st.session_state[f"{element}_color"] = pending["color"]
-    if pending.get("style") in ELEMENT_STYLES.get(element, []):
-        st.session_state[f"{element}_style"] = pending["style"]
+    if pending.get("style"):
+        st.session_state[f"{element}_texture"] = pending["style"]
     st.session_state["active_element"] = element
 
 
@@ -919,17 +1111,25 @@ def build_edits_from_state():
     edits = []
     all_elements = ELEMENTS + list(st.session_state.get("saved_custom_elements", []))
     for element in all_elements:
-        color = st.session_state.get(f"{element}_color", "Keep as is")
-        style = st.session_state.get(f"{element}_style", "Keep as is")
-        if color == "Keep as is" and style == "Keep as is":
+        raw_color = st.session_state.get(f"{element}_color", "Keep as is")
+        texture = st.session_state.get(f"{element}_texture", "Keep as is")
+        if raw_color == "Keep as is" and texture == "Keep as is":
             continue
+        # Resolve "Custom" color to the typed value
+        if raw_color == "Custom":
+            color = (st.session_state.get(f"{element}_custom_color") or "").strip() or "custom color"
+        else:
+            color = raw_color
+        custom_texture_desc = ""
+        if texture == "Custom":
+            custom_texture_desc = (st.session_state.get(f"{element}_custom_texture") or "").strip()
         edits.append({
             "id": str(uuid.uuid4()),
             "element": element,
             "color": color,
-            "style": style,
-            "custom_color": st.session_state.get(f"{element}_custom_color", ""),
-            "custom_style": st.session_state.get(f"{element}_custom_style", ""),
+            "style": texture,         # texture stored in "style" field for describe_edit() compat
+            "custom_color": "",
+            "custom_style": custom_texture_desc,
             "note": st.session_state.get(f"{element}_note", ""),
             "price": float(st.session_state.get(f"{element}_price", 0.0) or 0.0),
             "selected": False,
@@ -969,8 +1169,14 @@ def add_variation(name, image_bytes, edits, customs):
 
 
 def run_generate():
-    """Build the edit history from state, call GPT-image-1 once, store the
-    result as the current image and as a new variation."""
+    """Build edits from state, show the spinner in the image placeholder, call
+    GPT-image-1, then replace the spinner with the result — all in one pass.
+
+    _image_placeholder is created in main() before render_sidebar() runs so this
+    function can reach it. Streamlit flushes each placeholder.markdown() call to
+    the browser immediately via WebSocket, so the spinner appears before the
+    blocking edit_image() call begins.
+    """
     if not st.session_state.original_image_bytes:
         st.sidebar.error("Upload a house photo first.")
         return
@@ -980,28 +1186,727 @@ def run_generate():
         st.sidebar.warning("Select at least one change before generating.")
         return
     try:
-        with lottie_loading("GPT-image-1 is crafting your design..."):
-            _, image_bytes = edit_image(
-                st.session_state.original_image_bytes, edits, customs
-            )
+        if _image_placeholder is not None:
+            _image_placeholder.markdown(_SPINNER_HTML, unsafe_allow_html=True)
+        _, image_bytes = edit_image(
+            st.session_state.original_image_bytes, edits, customs
+        )
         st.session_state.current_image_bytes = image_bytes
         st.session_state.edit_history = edits
         count = len(st.session_state.variations) + 1
         add_variation(f"Design {count}", image_bytes, edits, customs)
         st.session_state.last_batch_ids = []
+        if _image_placeholder is not None:
+            _image_placeholder.image(image_bytes, use_container_width=True)
         st.sidebar.success("Preview generated.")
     except Exception as exc:  # noqa: BLE001
+        if _image_placeholder is not None:
+            _image_placeholder.image(
+                st.session_state.current_image_bytes, use_container_width=True
+            )
         st.error(f"Generation failed: {exc}")
 
 
 # --------------------------------------------------------------------------- #
 # Sidebar sections (rendered inside the option-menu dispatch)
 # --------------------------------------------------------------------------- #
+
+def _parse_hex(hex_color):
+    h = hex_color.lstrip("#")
+    if len(h) == 3:
+        h = h[0]*2 + h[1]*2 + h[2]*2
+    try:
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except (ValueError, IndexError):
+        return 136, 136, 136
+
+
+def _img_to_b64(img: Image.Image) -> str:
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+@st.cache_data
+def generate_texture_previews() -> dict:
+    """Generate 120x80 grayscale texture previews as base64 PNG strings. Cached once."""
+    W, H = 120, 80
+    rng = random.Random(42)  # fixed seed for deterministic output
+    out = {}
+
+    # Brick: alternating rows of rectangles offset every other row
+    img = Image.new("RGB", (W, H), (100, 100, 100))
+    draw = ImageDraw.Draw(img)
+    bh, bw, m = 14, 30, 2
+    for row in range(H // bh + 2):
+        y = row * bh
+        ox = (bw // 2) if row % 2 else 0
+        x = -ox
+        while x < W:
+            c = rng.randint(82, 118)
+            draw.rectangle([x + m, y + m, x + bw - m - 1, y + bh - m - 1],
+                           fill=(c, c, c))
+            x += bw
+    out["Brick"] = _img_to_b64(img)
+
+    # Stucco: base fill + many small random dots/dashes
+    img = Image.new("RGB", (W, H), (108, 108, 108))
+    draw = ImageDraw.Draw(img)
+    for _ in range(800):
+        x, y = rng.randint(0, W - 1), rng.randint(0, H - 1)
+        c = rng.randint(65, 148)
+        r = rng.randint(1, 3)
+        draw.ellipse([x - r, y - r, x + r, y + r], fill=(c, c, c))
+    out["Stucco"] = _img_to_b64(img)
+
+    # Wood Panels: vertical stripes with subtle color variation + dark seam
+    img = Image.new("RGB", (W, H), (105, 105, 105))
+    draw = ImageDraw.Draw(img)
+    pw_cycle = [18, 20, 17, 19, 18, 21, 17]
+    x = 0
+    for pw in pw_cycle * 4:
+        if x >= W:
+            break
+        c = rng.randint(85, 122)
+        draw.rectangle([x, 0, x + pw - 2, H - 1], fill=(c, c, c))
+        draw.line([x + pw - 1, 0, x + pw - 1, H - 1], fill=(48, 48, 48), width=1)
+        x += pw
+    out["Wood Panels"] = _img_to_b64(img)
+
+    # Cedar Shingles: overlapping horizontal trapezoids
+    img = Image.new("RGB", (W, H), (92, 92, 92))
+    draw = ImageDraw.Draw(img)
+    sh = 16
+    for row in range(H // sh + 2):
+        y_top = row * sh
+        y_bot = y_top + sh
+        ox = 12 if row % 2 else 0
+        sx = -22 + ox
+        while sx < W + 22:
+            c = rng.randint(78, 122)
+            pts = [(sx + 2, y_top), (sx + 20, y_top),
+                   (sx + 22, y_bot), (sx, y_bot)]
+            draw.polygon(pts, fill=(c, c, c))
+            draw.line([(sx, y_bot), (sx + 22, y_bot)],
+                      fill=(48, 48, 48), width=1)
+            sx += 22
+    out["Cedar Shingles"] = _img_to_b64(img)
+
+    # Board and Batten: wide vertical boards with narrow battens
+    img = Image.new("RGB", (W, H), (105, 105, 105))
+    draw = ImageDraw.Draw(img)
+    x = 0
+    while x < W:
+        c = rng.randint(88, 122)
+        draw.rectangle([x, 0, x + 19, H - 1], fill=(c, c, c))
+        x += 20
+        if x < W:
+            draw.rectangle([x, 0, x + 3, H - 1], fill=(55, 55, 55))
+            x += 4
+    out["Board and Batten"] = _img_to_b64(img)
+
+    # Stone Veneer: irregular polygons
+    img = Image.new("RGB", (W, H), (88, 88, 88))
+    draw = ImageDraw.Draw(img)
+    for _ in range(35):
+        cx, cy = rng.randint(8, W - 8), rng.randint(6, H - 6)
+        n = rng.randint(5, 8)
+        pts = []
+        for i in range(n):
+            angle = 2 * math.pi * i / n + rng.uniform(-0.4, 0.4)
+            r = rng.randint(7, 16)
+            pts.append((int(cx + r * math.cos(angle)),
+                        int(cy + r * math.sin(angle))))
+        c = rng.randint(72, 128)
+        draw.polygon(pts, fill=(c, c, c), outline=(45, 45, 45))
+    out["Stone Veneer"] = _img_to_b64(img)
+
+    # Vinyl Lap: clean horizontal bands with subtle shadow/highlight lines
+    img = Image.new("RGB", (W, H), (108, 108, 108))
+    draw = ImageDraw.Draw(img)
+    lh = 12
+    for row in range(H // lh + 2):
+        y = row * lh
+        c = 95 + (row % 2) * 18
+        draw.rectangle([0, y, W - 1, y + lh - 2], fill=(c, c, c))
+        draw.line([0, y + lh - 1, W - 1, y + lh - 1], fill=(55, 55, 55), width=1)
+        draw.line([0, y, W - 1, y], fill=(138, 138, 138), width=1)
+    out["Vinyl Lap"] = _img_to_b64(img)
+
+    # Metal Panel: horizontal panels with highlight at top and shadow at bottom
+    img = Image.new("RGB", (W, H), (112, 112, 112))
+    draw = ImageDraw.Draw(img)
+    ph = 20
+    for row in range(H // ph + 2):
+        y = row * ph
+        c = 102 + (row % 2) * 12
+        draw.rectangle([0, y + 2, W - 1, y + ph - 2], fill=(c, c, c))
+        draw.line([0, y, W - 1, y], fill=(155, 155, 155), width=1)
+        draw.line([0, y + 1, W - 1, y + 1], fill=(142, 142, 142), width=1)
+        draw.line([0, y + ph - 1, W - 1, y + ph - 1], fill=(65, 65, 65), width=1)
+    out["Metal Panel"] = _img_to_b64(img)
+
+    # ---- Roof textures -------------------------------------------------------
+
+    # Asphalt Shingles: wide offset rows like cedar shingles but chunkier
+    img = Image.new("RGB", (W, H), (75, 75, 75))
+    draw = ImageDraw.Draw(img)
+    sh = 18
+    for row in range(H // sh + 2):
+        y_top, y_bot = row * sh, row * sh + sh
+        ox = 20 if row % 2 else 0
+        sx = -40 + ox
+        while sx < W + 40:
+            c = rng.randint(60, 95)
+            pts = [(sx + 2, y_top), (sx + 38, y_top),
+                   (sx + 40, y_bot), (sx, y_bot)]
+            draw.polygon(pts, fill=(c, c, c))
+            draw.line([(sx, y_bot), (sx + 40, y_bot)], fill=(35, 35, 35), width=1)
+            sx += 40
+    out["Asphalt Shingles"] = _img_to_b64(img)
+
+    # Slate Tiles: regular grid of rectangular tiles offset every other row
+    img = Image.new("RGB", (W, H), (80, 80, 80))
+    draw = ImageDraw.Draw(img)
+    tw, th, tm = 28, 16, 2
+    for row in range(H // th + 2):
+        y = row * th
+        ox = (tw // 2) if row % 2 else 0
+        x = -ox
+        while x < W:
+            c = rng.randint(65, 100)
+            draw.rectangle([x + tm, y + tm, x + tw - tm, y + th - tm], fill=(c, c, c))
+            x += tw
+    out["Slate Tiles"] = _img_to_b64(img)
+
+    # Clay Tiles: rows of overlapping arc/dome shapes
+    img = Image.new("RGB", (W, H), (95, 95, 95))
+    draw = ImageDraw.Draw(img)
+    tw2, th2 = 20, 22
+    for row in range(H // th2 + 2):
+        y = row * th2
+        ox = (tw2 // 2) if row % 2 else 0
+        x = -tw2 + ox
+        while x < W + tw2:
+            c = rng.randint(80, 118)
+            # dome: filled ellipse at top, rectangle body below
+            draw.ellipse([x + 2, y, x + tw2 - 2, y + th2 // 2 + 4], fill=(c, c, c))
+            draw.rectangle([x + 2, y + th2 // 4, x + tw2 - 2, y + th2 - 2], fill=(max(0, c - 15), max(0, c - 15), max(0, c - 15)))
+            x += tw2
+        draw.line([0, y + th2 - 1, W, y + th2 - 1], fill=(45, 45, 45), width=1)
+    out["Clay Tiles"] = _img_to_b64(img)
+
+    # Metal Standing Seam: vertical seams with flat panel faces
+    img = Image.new("RGB", (W, H), (108, 108, 108))
+    draw = ImageDraw.Draw(img)
+    sw = 16
+    x = 0
+    while x < W:
+        c = rng.randint(95, 122)
+        draw.rectangle([x, 0, x + sw - 3, H - 1], fill=(c, c, c))
+        draw.rectangle([x + sw - 2, 0, x + sw - 1, H - 1], fill=(55, 55, 55))
+        draw.line([x + sw - 3, 0, x + sw - 3, H - 1], fill=(148, 148, 148), width=1)
+        x += sw
+    out["Metal Standing Seam"] = _img_to_b64(img)
+
+    # Wood Shake: irregular cedar shingles with rougher edges
+    img = Image.new("RGB", (W, H), (88, 88, 88))
+    draw = ImageDraw.Draw(img)
+    sh2 = 14
+    for row in range(H // sh2 + 2):
+        y_top, y_bot = row * sh2, row * sh2 + sh2
+        ox = rng.randint(0, 14) if row % 2 else 0
+        sx = -28 + ox
+        while sx < W + 28:
+            c = rng.randint(70, 112)
+            w_var = rng.randint(22, 32)
+            pts = [(sx + 1, y_top), (sx + w_var - 1, y_top),
+                   (sx + w_var + rng.randint(-2, 2), y_bot),
+                   (sx + rng.randint(-2, 2), y_bot)]
+            draw.polygon(pts, fill=(c, c, c))
+            draw.line([(sx, y_bot), (sx + w_var, y_bot)], fill=(42, 42, 42), width=1)
+            sx += w_var
+    out["Wood Shake"] = _img_to_b64(img)
+
+    # Copper: smooth metal panels (slightly lighter, more uniform than Metal Panel)
+    img = Image.new("RGB", (W, H), (118, 118, 118))
+    draw = ImageDraw.Draw(img)
+    ph2 = 24
+    for row in range(H // ph2 + 2):
+        y = row * ph2
+        c = 110 + (row % 2) * 10
+        draw.rectangle([0, y + 1, W - 1, y + ph2 - 2], fill=(c, c, c))
+        draw.line([0, y, W - 1, y], fill=(162, 162, 162), width=2)
+        draw.line([0, y + ph2 - 1, W - 1, y + ph2 - 1], fill=(72, 72, 72), width=1)
+    out["Copper"] = _img_to_b64(img)
+
+    # Flat Membrane: nearly plain with subtle noise texture
+    img = Image.new("RGB", (W, H), (105, 105, 105))
+    draw = ImageDraw.Draw(img)
+    for _ in range(200):
+        x2, y2 = rng.randint(0, W - 1), rng.randint(0, H - 1)
+        c = rng.randint(95, 115)
+        draw.point((x2, y2), fill=(c, c, c))
+    out["Flat Membrane"] = _img_to_b64(img)
+
+    # ---- Front Door textures -------------------------------------------------
+
+    # Solid Wood: wide vertical grain planks
+    img = Image.new("RGB", (W, H), (102, 102, 102))
+    draw = ImageDraw.Draw(img)
+    pw2 = 24
+    x = 0
+    while x < W:
+        c = rng.randint(82, 118)
+        draw.rectangle([x, 0, x + pw2 - 2, H - 1], fill=(c, c, c))
+        for grain_y in range(0, H, rng.randint(8, 16)):
+            draw.line([x, grain_y, x + pw2 - 2, grain_y + rng.randint(-2, 2)],
+                      fill=(max(0, c - 12), max(0, c - 12), max(0, c - 12)), width=1)
+        draw.line([x + pw2 - 1, 0, x + pw2 - 1, H - 1], fill=(45, 45, 45), width=1)
+        x += pw2
+    out["Solid Wood"] = _img_to_b64(img)
+
+    # Glass Panels: grid of light rectangles with frame
+    img = Image.new("RGB", (W, H), (65, 65, 65))
+    draw = ImageDraw.Draw(img)
+    cols_g, rows_g = 3, 4
+    cw = (W - 10) // cols_g
+    ch = (H - 10) // rows_g
+    for gy in range(rows_g):
+        for gx in range(cols_g):
+            x1 = 5 + gx * cw + 2
+            y1 = 5 + gy * ch + 2
+            draw.rectangle([x1, y1, x1 + cw - 4, y1 + ch - 4], fill=(145, 145, 145))
+            draw.line([x1 + 1, y1 + 1, x1 + cw - 5, y1 + 1], fill=(175, 175, 175), width=1)
+    out["Glass Panels"] = _img_to_b64(img)
+
+    # Craftsman Style: wide top rail + horizontal divider + vertical bottom panels
+    img = Image.new("RGB", (W, H), (85, 85, 85))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([4, 4, W - 4, 22], fill=(105, 105, 105))   # top rail
+    draw.rectangle([4, 22, W - 4, 26], fill=(50, 50, 50))      # divider
+    for gx2 in range(3):
+        x1 = 4 + gx2 * ((W - 8) // 3) + 2
+        draw.rectangle([x1, 26, x1 + (W - 8) // 3 - 4, H - 4], fill=(98, 98, 98))
+    out["Craftsman Style"] = _img_to_b64(img)
+
+    # Arched: plain panel with arch outline at top
+    img = Image.new("RGB", (W, H), (95, 95, 95))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([6, H // 3, W - 6, H - 6], fill=(108, 108, 108))
+    draw.arc([6, 6, W - 6, H // 3 * 2], start=0, end=180, fill=(55, 55, 55), width=3)
+    out["Arched"] = _img_to_b64(img)
+
+    # Modern Flat: smooth solid with subtle vertical centerline
+    img = Image.new("RGB", (W, H), (105, 105, 105))
+    draw = ImageDraw.Draw(img)
+    draw.line([W // 2, 0, W // 2, H], fill=(78, 78, 78), width=2)
+    draw.rectangle([4, 4, W // 2 - 3, H - 4], fill=(110, 110, 110))
+    draw.rectangle([W // 2 + 2, 4, W - 4, H - 4], fill=(110, 110, 110))
+    out["Modern Flat"] = _img_to_b64(img)
+
+    # French Doors: grid with vertical center divide and cross panels
+    img = Image.new("RGB", (W, H), (72, 72, 72))
+    draw = ImageDraw.Draw(img)
+    draw.line([W // 2, 0, W // 2, H], fill=(50, 50, 50), width=3)
+    for gy3 in range(3):
+        y1 = 4 + gy3 * ((H - 8) // 3)
+        for gx3 in range(2):
+            x1 = 4 + gx3 * (W // 2)
+            draw.rectangle([x1 + 3, y1 + 2, x1 + W // 2 - 6, y1 + (H - 8) // 3 - 3],
+                           fill=(138, 138, 138))
+    out["French Doors"] = _img_to_b64(img)
+
+    # Steel: smooth metal with horizontal ribs
+    img = Image.new("RGB", (W, H), (108, 108, 108))
+    draw = ImageDraw.Draw(img)
+    for rib_y in range(0, H, 10):
+        draw.line([0, rib_y, W, rib_y], fill=(125, 125, 125), width=1)
+        draw.line([0, rib_y + 1, W, rib_y + 1], fill=(88, 88, 88), width=1)
+    out["Steel"] = _img_to_b64(img)
+
+    # Fiberglass: subtle horizontal wood-grain-like lines
+    img = Image.new("RGB", (W, H), (105, 105, 105))
+    draw = ImageDraw.Draw(img)
+    for grain_y2 in range(0, H, rng.randint(3, 6)):
+        c = rng.randint(95, 115)
+        draw.line([0, grain_y2, W, grain_y2 + rng.randint(-1, 1)], fill=(c, c, c), width=1)
+    out["Fiberglass"] = _img_to_b64(img)
+
+    # ---- Shutter textures ----------------------------------------------------
+
+    # Louvered: angled horizontal slats
+    img = Image.new("RGB", (W, H), (88, 88, 88))
+    draw = ImageDraw.Draw(img)
+    lh2 = 10
+    for row2 in range(H // lh2 + 2):
+        y = row2 * lh2
+        c = 95 + (row2 % 2) * 15
+        draw.polygon([(0, y + 3), (W, y), (W, y + lh2 - 2), (0, y + lh2)],
+                     fill=(c, c, c))
+        draw.line([0, y + lh2, W, y + lh2 - 3], fill=(45, 45, 45), width=1)
+    out["Louvered"] = _img_to_b64(img)
+
+    # Raised Panel: outer frame with inset raised rectangle
+    img = Image.new("RGB", (W, H), (90, 90, 90))
+    draw = ImageDraw.Draw(img)
+    # top panel
+    draw.rectangle([4, 4, W - 4, H // 2 - 2], fill=(105, 105, 105))
+    draw.rectangle([8, 8, W - 8, H // 2 - 6], fill=(115, 115, 115))
+    # bottom panel
+    draw.rectangle([4, H // 2 + 2, W - 4, H - 4], fill=(105, 105, 105))
+    draw.rectangle([8, H // 2 + 6, W - 8, H - 8], fill=(115, 115, 115))
+    out["Raised Panel"] = _img_to_b64(img)
+
+    # Flat Panel: plain flat with subtle border shadow
+    img = Image.new("RGB", (W, H), (100, 100, 100))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([4, 4, W - 4, H - 4], fill=(108, 108, 108))
+    draw.rectangle([4, 4, W - 4, 5], fill=(125, 125, 125))
+    draw.rectangle([4, H - 5, W - 4, H - 4], fill=(65, 65, 65))
+    out["Flat Panel"] = _img_to_b64(img)
+
+    # Bahama Style: diagonal angled slats (top-hinged style)
+    img = Image.new("RGB", (W, H), (80, 80, 80))
+    draw = ImageDraw.Draw(img)
+    for i2 in range(-H, H + H, 12):
+        c = rng.randint(85, 118)
+        draw.polygon([(0, i2), (W, i2 - 20), (W, i2 - 10), (0, i2 + 10)],
+                     fill=(c, c, c))
+        draw.line([(0, i2 + 10), (W, i2 - 10)], fill=(45, 45, 45), width=1)
+    out["Bahama Style"] = _img_to_b64(img)
+
+    # Colonial: multiple raised sub-panels in a column
+    img = Image.new("RGB", (W, H), (88, 88, 88))
+    draw = ImageDraw.Draw(img)
+    panel_h = (H - 8) // 3
+    for pi in range(3):
+        py = 4 + pi * panel_h
+        draw.rectangle([4, py, W - 4, py + panel_h - 2], fill=(102, 102, 102))
+        draw.rectangle([8, py + 4, W - 8, py + panel_h - 6], fill=(112, 112, 112))
+    out["Colonial"] = _img_to_b64(img)
+
+    # ---- Garage Door textures ------------------------------------------------
+
+    # Carriage Style: wood plank background with X brace overlay
+    img = Image.new("RGB", (W, H), (95, 95, 95))
+    draw = ImageDraw.Draw(img)
+    plank_w = 15
+    x = 0
+    while x < W:
+        c = rng.randint(82, 112)
+        draw.rectangle([x, 0, x + plank_w - 2, H - 1], fill=(c, c, c))
+        x += plank_w
+    draw.line([0, 0, W, H], fill=(55, 55, 55), width=3)
+    draw.line([W, 0, 0, H], fill=(55, 55, 55), width=3)
+    out["Carriage Style"] = _img_to_b64(img)
+
+    # Modern Flat (Garage): clean horizontal bands
+    img = Image.new("RGB", (W, H), (112, 112, 112))
+    draw = ImageDraw.Draw(img)
+    band_h = H // 4
+    for bi in range(4):
+        y = bi * band_h
+        c = 105 + (bi % 2) * 12
+        draw.rectangle([0, y, W - 1, y + band_h - 2], fill=(c, c, c))
+        draw.line([0, y + band_h - 1, W - 1, y + band_h - 1], fill=(60, 60, 60), width=1)
+    out["Modern Flat"] = _img_to_b64(img)
+
+    # Full Glass: grid of light panes with dark frame
+    img = Image.new("RGB", (W, H), (55, 55, 55))
+    draw = ImageDraw.Draw(img)
+    cols_gl, rows_gl = 4, 3
+    cw2 = (W - 10) // cols_gl
+    ch2 = (H - 8) // rows_gl
+    for gy4 in range(rows_gl):
+        for gx4 in range(cols_gl):
+            x1 = 5 + gx4 * cw2 + 2
+            y1 = 4 + gy4 * ch2 + 2
+            draw.rectangle([x1, y1, x1 + cw2 - 4, y1 + ch2 - 4], fill=(155, 155, 155))
+            draw.line([x1, y1, x1 + cw2 - 4, y1], fill=(175, 175, 175), width=1)
+    out["Full Glass"] = _img_to_b64(img)
+
+    # Wood Plank: horizontal planks (same idea as Wood Panels but rotated)
+    img = Image.new("RGB", (W, H), (100, 100, 100))
+    draw = ImageDraw.Draw(img)
+    plank_h2 = 14
+    y = 0
+    while y < H:
+        c = rng.randint(82, 118)
+        draw.rectangle([0, y, W - 1, y + plank_h2 - 2], fill=(c, c, c))
+        draw.line([0, y + plank_h2 - 1, W - 1, y + plank_h2 - 1], fill=(45, 45, 45), width=1)
+        draw.line([0, y, W - 1, y], fill=(128, 128, 128), width=1)
+        y += plank_h2
+    out["Wood Plank"] = _img_to_b64(img)
+
+    # Flush Panel: subtle horizontal seams only, very clean
+    img = Image.new("RGB", (W, H), (108, 108, 108))
+    draw = ImageDraw.Draw(img)
+    seam_h = H // 4
+    for si in range(4):
+        y = si * seam_h
+        draw.rectangle([0, y, W - 1, y + seam_h - 2], fill=(108 + (si % 2) * 4, 108 + (si % 2) * 4, 108 + (si % 2) * 4))
+        draw.line([0, y + seam_h - 1, W - 1, y + seam_h - 1], fill=(75, 75, 75), width=1)
+        draw.line([0, y, W - 1, y], fill=(130, 130, 130), width=1)
+    out["Flush Panel"] = _img_to_b64(img)
+
+    return out
+
+
+@st.cache_data
+def tint_texture_preview(b64_gray: str, hex_color: str) -> str:
+    """Blend a grayscale texture with a solid color overlay at 40% opacity."""
+    img = Image.open(io.BytesIO(base64.b64decode(b64_gray))).convert("RGBA")
+    r, g, b = _parse_hex(hex_color)
+    overlay = Image.new("RGBA", img.size, (r, g, b, int(255 * 0.4)))
+    return _img_to_b64(Image.alpha_composite(img, overlay))
+
+
+def _render_element_picker(element):
+    """Render the two-section color + texture picker for an element.
+    All selections are stored immediately in session_state on click."""
+    sel_color = st.session_state.get(f"{element}_color", "Keep as is")
+    sel_texture = st.session_state.get(f"{element}_texture", "Keep as is")
+    custom_hex = st.session_state.get(f"{element}_custom_color", "#c9a84c")
+    color_hex = (
+        custom_hex if sel_color == "Custom"
+        else next((h for n, h in PICKER_COLORS if n == sel_color), "#888888")
+    )
+
+    # ---- Section label styles -----------------------------------------------
+    _SEC = ("<div style='color:#888;font-size:10px;font-weight:600;"
+            "letter-spacing:1px;margin:10px 0 6px;'>")
+
+    _ck_a = sel_color == "Keep as is"
+    _kt_a = sel_texture == "Keep as is"
+    # Sanitised element name safe for use in CSS class names / button keys.
+    _el_safe = element.replace(" ", "_")
+
+    # ---- COLOR section — st.button() circles + rainbow Custom wheel ----------
+    st.markdown(f"{_SEC}COLOR</div>", unsafe_allow_html=True)
+
+    def _color_circle(col, cname, chex):
+        is_sel = sel_color == cname
+        border = "#c9a84c" if is_sel else "#2a2a2a"
+        shadow = "0 0 8px rgba(201,168,76,0.55)" if is_sel else "none"
+        css = [
+            f"button {{ background-color:{chex} !important;"
+            f" border:3px solid {border} !important;"
+            f" border-radius:50% !important;"
+            f" width:44px !important; height:44px !important;"
+            f" min-width:44px !important; min-height:0 !important;"
+            f" padding:0 !important; box-shadow:{shadow} !important;"
+            f" outline:none !important;"
+            f" display:block !important; margin:0 auto !important; }}",
+            "button:hover { border-color:#c9a84c !important; }",
+            "button:focus { outline:none !important; box-shadow:none !important; }",
+            "button:focus-visible { outline:none !important; box-shadow:none !important; }",
+            "button:active { outline:none !important; }",
+            "button p { display:none !important; }",
+        ]
+        with col:
+            with stylable_container(f"cpick_{element}_{cname}".replace(" ", "_"), css):
+                if st.button(" ", key=f"cpbtn_{element}_{cname}"):
+                    st.session_state[f"{element}_color"] = cname
+                    st.rerun()
+
+    # Row 1: first 5 colours
+    cols1 = st.columns(5)
+    for col, (cname, chex) in zip(cols1, PICKER_COLORS[:5]):
+        _color_circle(col, cname, chex)
+
+    # Row 2: remaining 4 colours + rainbow Custom wheel as the 5th slot
+    cols2 = st.columns(5)
+    for col, (cname, chex) in zip(cols2, PICKER_COLORS[5:]):
+        _color_circle(col, cname, chex)
+
+    # Rainbow Custom wheel — 5th slot of row 2
+    is_custom = sel_color == "Custom"
+    wheel_border = "#c9a84c" if is_custom else "#2a2a2a"
+    wheel_shadow = "0 0 8px rgba(201,168,76,0.55)" if is_custom else "none"
+    _wheel_css = [
+        f"button {{ background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red)"
+        f" !important; border:3px solid {wheel_border} !important;"
+        f" border-radius:50% !important;"
+        f" width:44px !important; height:44px !important;"
+        f" min-width:44px !important; min-height:0 !important;"
+        f" padding:0 !important; box-shadow:{wheel_shadow} !important;"
+        f" outline:none !important;"
+        f" display:block !important; margin:0 auto !important; }}",
+        "button:hover { border-color:#c9a84c !important; }",
+        "button:focus { outline:none !important; box-shadow:none !important; }",
+        "button:focus-visible { outline:none !important; box-shadow:none !important; }",
+        "button:active { outline:none !important; }",
+        "button p { display:none !important; }",
+    ]
+    with cols2[4]:
+        with stylable_container(f"cpick_{element}_Custom_wheel", _wheel_css):
+            if st.button(" ", key=f"cpbtn_{element}_Custom"):
+                st.session_state[f"{element}_color"] = "Custom"
+                st.rerun()
+
+    # Keep color — plain st.button (no stylable_container). Its dynamic gold/grey
+    # state is styled by targeting the button's own key class st-key-cpkeep_btn_{element}.
+    _ck_bg     = "#c9a84c" if _ck_a else "#2a2a2a"
+    _ck_border = "#c9a84c" if _ck_a else "#555555"
+    _ck_color  = "#000000" if _ck_a else "#aaaaaa"
+    st.markdown(f"""
+<style>
+.st-key-cpkeep_btn_{_el_safe} button {{
+    background:{_ck_bg} !important; border:1px solid {_ck_border} !important;
+    color:{_ck_color} !important; font-size:11px !important; padding:4px 12px !important;
+    border-radius:20px !important; min-height:0 !important; line-height:1.4 !important;
+    margin-top:8px !important; width:auto !important;
+}}
+.st-key-cpkeep_btn_{_el_safe} button:hover {{
+    background:#c9a84c !important; border-color:#c9a84c !important; color:#000000 !important;
+}}
+.st-key-cpkeep_btn_{_el_safe} button p {{
+    color:inherit !important; font-size:11px !important; margin:0 !important;
+}}
+</style>
+""", unsafe_allow_html=True)
+    if st.button("✓ Keep color as is" if _ck_a else "Keep color as is",
+                 key=f"cpkeep_btn_{_el_safe}"):
+        st.session_state[f"{element}_color"] = "Keep as is"
+        st.rerun()
+
+    # When Custom is active show a color picker; changes update color_hex live
+    if is_custom:
+        _cp_value = st.session_state.get(f"{element}_custom_color") or "#ffffff"
+        picked = st.color_picker(
+            "Pick a custom color",
+            value=_cp_value,
+            key=f"colorpicker_{element}",
+        )
+        if picked != st.session_state.get(f"{element}_custom_color"):
+            st.session_state[f"{element}_custom_color"] = picked
+            st.rerun()
+
+    # ---- TEXTURE section ----------------------------------------------------
+    st.markdown(f"{_SEC}TEXTURE</div>", unsafe_allow_html=True)
+
+    tex_previews = generate_texture_previews()
+    _TEX_BTN_CSS = [
+        "button { background:transparent !important; border:none !important;"
+        " box-shadow:none !important; width:100% !important;"
+        " padding:2px 0 !important; min-height:0 !important; }",
+        "button:hover { color:#c9a84c !important; }",
+        "button p { font-size:10px !important; margin:0 !important; }",
+    ]
+
+    # Element-specific texture list; fall back to Siding list for unknown elements
+    _all_tex_slots = ELEMENT_TEXTURES.get(element, ELEMENT_TEXTURES["Siding"])
+
+    _TEX_OVER_CSS = [
+        "button { background:transparent !important; border:none !important;"
+        " box-shadow:none !important; outline:none !important;"
+        " width:100% !important;"
+        " height:80px !important; min-height:80px !important;"
+        " padding:0 !important; position:relative !important;"
+        " z-index:2 !important; }",
+        "button:hover { background:transparent !important; box-shadow:none !important; }",
+        "button:focus { outline:none !important; box-shadow:none !important; }",
+        "button:focus-visible { outline:none !important; box-shadow:none !important; }",
+        "button:active { outline:none !important; box-shadow:none !important; }",
+        "button p { display:none !important; }",
+    ]
+
+    st.markdown("<div style='padding:4px 2px;'>", unsafe_allow_html=True)
+    for i in range(0, len(_all_tex_slots), 3):
+        cols = st.columns([1, 1, 1], gap="small")
+        for col, tex in zip(cols, _all_tex_slots[i:i + 3]):
+            is_sel = sel_texture not in ("", "Keep as is") and sel_texture == tex
+            border = "#c9a84c" if is_sel else "#2a2a2a"
+            shadow = "0 0 8px rgba(201,168,76,0.55)" if is_sel else "none"
+            safe = f"tpick_{element}_{tex}".replace(" ", "_")
+
+            if tex == "Custom":
+                # Dark card with dashed gold border — no image, just the label overlay
+                with col:
+                    with stylable_container(safe, _TEX_OVER_CSS):
+                        if st.button(" ", key=f"tpbtn_{element}_{tex}",
+                                     use_container_width=True):
+                            st.session_state[f"{element}_texture"] = "Custom"
+                            st.rerun()
+                    st.markdown(
+                        f"<div style='width:100%;height:80px;border-radius:8px;"
+                        f"border:2px dashed {border};box-shadow:{shadow};"
+                        f"overflow:hidden;box-sizing:border-box;"
+                        f"margin-top:-84px;margin-bottom:8px;"
+                        f"background:#1a1a1a;"
+                        f"position:relative;z-index:1;display:flex;"
+                        f"align-items:center;justify-content:center;'>"
+                        f"<div style='position:absolute;bottom:0;left:0;width:100%;"
+                        f"background:rgba(0,0,0,0.6);color:#c9a84c;font-size:11px;"
+                        f"text-align:center;padding:3px 0;box-sizing:border-box;'>Custom</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+            else:
+                b64 = tint_texture_preview(tex_previews[tex], color_hex)
+                with col:
+                    with stylable_container(safe, _TEX_OVER_CSS):
+                        if st.button(" ", key=f"tpbtn_{element}_{tex}",
+                                     use_container_width=True):
+                            st.session_state[f"{element}_texture"] = tex
+                            st.rerun()
+                    st.markdown(
+                        f"<div style='width:100%;height:80px;border-radius:8px;"
+                        f"border:2px solid {border};box-shadow:{shadow};"
+                        f"overflow:hidden;box-sizing:border-box;"
+                        f"margin-top:-84px;margin-bottom:8px;"
+                        f"position:relative;z-index:1;"
+                        f"display:flex;align-items:center;justify-content:center;'>"
+                        f"<img src='data:image/png;base64,{b64}' "
+                        f"style='width:100%;height:80px;object-fit:cover;"
+                        f"object-position:center center;display:block;'/>"
+                        f"<div style='position:absolute;bottom:0;left:0;width:100%;"
+                        f"background:rgba(0,0,0,0.6);color:#ffffff;font-size:11px;"
+                        f"text-align:center;padding:3px 0;box-sizing:border-box;'>{tex}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    if sel_texture == "Custom":
+        st.text_input(
+            "Describe your texture",
+            key=f"{element}_custom_texture",
+            placeholder="e.g. smooth concrete, corrugated metal...",
+        )
+
+    # Keep texture — plain st.button styled by its own key class (matches keep color).
+    _kt_bg     = "#c9a84c" if _kt_a else "#2a2a2a"
+    _kt_border = "#c9a84c" if _kt_a else "#555555"
+    _kt_color  = "#000000" if _kt_a else "#aaaaaa"
+    st.markdown(f"""
+<style>
+.st-key-tpkeep_btn_{_el_safe} button {{
+    background:{_kt_bg} !important; border:1px solid {_kt_border} !important;
+    color:{_kt_color} !important; font-size:11px !important; padding:4px 12px !important;
+    border-radius:20px !important; min-height:0 !important; line-height:1.4 !important;
+    margin-top:0 !important; margin-bottom:8px !important; width:auto !important;
+}}
+.st-key-tpkeep_btn_{_el_safe} button:hover {{
+    background:#c9a84c !important; border-color:#c9a84c !important; color:#000000 !important;
+}}
+.st-key-tpkeep_btn_{_el_safe} button p {{
+    color:inherit !important; font-size:11px !important; margin:0 !important;
+}}
+</style>
+""", unsafe_allow_html=True)
+    if st.button("✓ Keep texture as is" if _kt_a else "Keep texture as is",
+                 key=f"tpkeep_btn_{_el_safe}"):
+        st.session_state[f"{element}_texture"] = "Keep as is"
+        st.session_state.pop(f"{element}_custom_texture", None)
+        st.rerun()
+
+
 def sb_design():
-    """Design panel: element segmented tabs (built-in + saved custom + Custom),
-    per-element controls, custom instructions, and generate buttons."""
-    saved_custom = st.session_state.get("saved_custom_elements", [])
-    all_elements_for_tabs = ELEMENTS + saved_custom + ["Custom"]
+    """Design panel: element tabs (built-in + Custom), a visual swatch grid for
+    each element, freeform custom instructions, and the generate buttons."""
+    all_elements_for_tabs = ELEMENTS + ["Custom"]
 
     st.markdown("<div class='sb-h'>Elements</div>", unsafe_allow_html=True)
 
@@ -1010,29 +1915,49 @@ def sb_design():
         current = ELEMENTS[0]
 
     _EL_BTN_BASE = (
-        " border:none !important; border-radius:6px !important;"
+        " border:none !important; border-radius:8px !important;"
         " width:100% !important; padding:4px 2px !important;"
-        " font-size:11px !important; white-space:nowrap !important;"
+        " white-space:nowrap !important;"
         " overflow:hidden !important; text-overflow:ellipsis !important;"
         " min-height:32px !important; line-height:1.2 !important;"
         " box-sizing:border-box !important;"
     )
-    _EL_ACTIVE_CSS = (
+    # button p rule is a separate list entry so it stays scoped to this button.
+    _EL_P = ("button p { text-align:center !important; font-size:13px !important;"
+             " white-space:nowrap !important; margin:0 !important; }")
+    _EL_ACTIVE_CSS = [
         f"button {{ background-color:#c9a84c !important; color:#000000 !important;"
-        f" font-weight:700 !important;{_EL_BTN_BASE} }}"
-        " button:hover { background-color:#c9a84c !important; color:#000000 !important; }"
-    )
-    _EL_INACTIVE_CSS = (
+        f" font-weight:700 !important;{_EL_BTN_BASE} }}",
+        "button:hover { background-color:#c9a84c !important; color:#000000 !important; }",
+        "button:focus { outline:none !important; box-shadow:none !important;"
+        " border-radius:8px !important; }",
+        "button:focus-visible { outline:none !important; box-shadow:none !important;"
+        " border-radius:8px !important; }",
+        "button:active { outline:none !important; box-shadow:none !important; }",
+        _EL_P,
+    ]
+    _EL_INACTIVE_CSS = [
         f"button {{ background-color:#1e1e1e !important; color:#aaaaaa !important;"
-        f" font-weight:500 !important;{_EL_BTN_BASE} }}"
-        " button:hover { background-color:#252525 !important; color:#c9a84c !important; }"
-    )
+        f" font-weight:500 !important;{_EL_BTN_BASE} }}",
+        "button:hover { background-color:#252525 !important; color:#c9a84c !important; }",
+        "button:focus { outline:none !important; box-shadow:none !important;"
+        " border-radius:8px !important; }",
+        "button:focus-visible { outline:none !important; box-shadow:none !important;"
+        " border-radius:8px !important; }",
+        "button:active { outline:none !important; box-shadow:none !important; }",
+        _EL_P,
+    ]
 
     def _el_button(col, el_name):
         is_active = current == el_name
         with col:
             with stylable_container(f"eltab_{el_name}", _EL_ACTIVE_CSS if is_active else _EL_INACTIVE_CSS):
                 if st.button(el_name, key=f"eltab_btn_{el_name}", use_container_width=True):
+                    # Reset texture if current selection isn't valid for the new element
+                    valid_textures = ELEMENT_TEXTURES.get(el_name, [])
+                    cur_tex = st.session_state.get(f"{el_name}_texture", "Keep as is")
+                    if cur_tex not in valid_textures and cur_tex != "Keep as is":
+                        st.session_state[f"{el_name}_texture"] = "Keep as is"
                     st.session_state.active_element = el_name
                     st.rerun()
 
@@ -1047,121 +1972,43 @@ def sb_design():
         unsafe_allow_html=True,
     )
 
-    # Fixed two rows for the built-in elements; saved custom + Custom spill into extra rows
-    base_rows = [all_elements_for_tabs[:3], all_elements_for_tabs[3:6]]
-    overflow = all_elements_for_tabs[6:]  # saved custom elements beyond the first two rows
-    for row_items in base_rows:
-        for col, el_name in zip(st.columns(3), row_items):
-            _el_button(col, el_name)
-    for i in range(0, len(overflow), 3):
-        for col, el_name in zip(st.columns(3), overflow[i:i+3]):
+    # Two rows of three: five built-in elements plus the Custom tab.
+    for i in range(0, len(all_elements_for_tabs), 3):
+        if i > 0:
+            st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+        for col, el_name in zip(st.columns(3), all_elements_for_tabs[i:i + 3]):
             _el_button(col, el_name)
 
     element = current
 
     if element == "Custom":
-        # ---- Freeform custom element tab --------------------------------- #
+        # ---- Freeform custom element: two inputs, included automatically --- #
         st.markdown(
-            "<div style='color:#fff;font-weight:600;margin:6px 0 2px;font-size:15px;'>"
+            "<div style='color:#fff;font-weight:600;margin:8px 0 4px;font-size:15px;'>"
             "Custom Element</div>",
             unsafe_allow_html=True,
         )
-        el_col, save_col = st.columns([4, 1])
-        el_col.text_input(
-            "Element name", key="custom_element_text",
-            placeholder="e.g. chimney, porch columns...",
-            label_visibility="collapsed",
+        st.text_input(
+            "What element?", key="custom_element_text",
+            placeholder="e.g. chimney, porch columns, walkway...",
         )
-        custom_el_text = (st.session_state.get("custom_element_text") or "").strip()
-        if custom_el_text:
-            st.text_input(
-                "Describe the change", key="custom_element_description",
-                placeholder="e.g. paint it black with a modern style",
-            )
-        if save_col.button("Save", key="save_custom_element", help="Add as permanent element tab"):
-            new_el = (st.session_state.get("custom_element_text") or "").strip()
-            if new_el and new_el not in st.session_state.get("saved_custom_elements", []):
-                st.session_state.saved_custom_elements.append(new_el)
-                for k, v in [(f"{new_el}_color", "Keep as is"), (f"{new_el}_style", "Keep as is"),
-                             (f"{new_el}_custom_color", ""), (f"{new_el}_custom_style", ""),
-                             (f"{new_el}_price", 0.0), (f"{new_el}_note", "")]:
-                    st.session_state[k] = v
-                st.session_state.active_element = new_el
-                st.toast(f"Added '{new_el}' as an element tab.")
-                st.rerun()
-            elif new_el:
-                st.toast(f"'{new_el}' is already saved as a tab.")
+        st.text_input(
+            "Describe the change", key="custom_element_description",
+            placeholder="e.g. paint it black with a modern style",
+        )
+        st.caption("Filled-in custom changes are included automatically when you generate.")
 
     else:
-        # ---- Standard element UI ----------------------------------------- #
-        st.markdown(
-            f"<div style='color:#fff;font-weight:600;margin:6px 0 2px;font-size:15px;'>"
-            f"{element}</div>",
-            unsafe_allow_html=True,
-        )
+        # ---- Color + texture picker --------------------------------------- #
+        _render_element_picker(element)
 
-        is_custom_el = element in saved_custom
-        color_opts = CUSTOM_ELEMENT_COLORS if is_custom_el else ELEMENT_COLORS[element]
-        style_opts = CUSTOM_ELEMENT_STYLES if is_custom_el else ELEMENT_STYLES[element]
-
-        for key, default in [(f"{element}_color", "Keep as is"), (f"{element}_style", "Keep as is"),
-                             (f"{element}_custom_color", ""), (f"{element}_custom_style", ""),
-                             (f"{element}_price", 0.0), (f"{element}_note", "")]:
-            st.session_state.setdefault(key, default)
-
-        st.selectbox("Color", color_opts, key=f"{element}_color")
-        if st.session_state[f"{element}_color"] == "Custom":
-            st.text_input("Describe the color", key=f"{element}_custom_color",
-                          placeholder="e.g. sage green")
-
-        st.selectbox("Style / Texture", style_opts, key=f"{element}_style")
-        if st.session_state[f"{element}_style"] == "Custom":
-            st.text_input("Describe the style/texture", key=f"{element}_custom_style",
-                          placeholder="e.g. reclaimed barn wood")
-
-        with st.expander("Add to Quote", expanded=False):
+        with st.expander("Add to Quote (optional)", expanded=False):
+            st.session_state.setdefault(f"{element}_price", 0.0)
+            st.session_state.setdefault(f"{element}_note", "")
             st.number_input("Estimated price ($)", min_value=0.0, step=100.0,
                             key=f"{element}_price")
             st.text_input("Note (material, brand, etc.)", key=f"{element}_note",
                           placeholder="optional")
-
-        if is_custom_el:
-            star_col, rm_col, hint_col = st.columns([1, 1, 3])
-        else:
-            star_col, hint_col = st.columns([1, 4])
-            rm_col = None
-
-        with star_col:
-            with stylable_container(
-                "starbtn",
-                "button { background:transparent !important; border:1px solid #c9a84c !important;"
-                " color:#c9a84c !important; font-size:13px !important; border-radius:10px !important; }"
-                " button:hover { background:rgba(201,168,76,0.15) !important; }",
-            ):
-                star = st.button("Save", key=f"fav_{element}",
-                                 help="Save this color + style as a favorite")
-
-        if rm_col is not None:
-            with rm_col:
-                with stylable_container("rmbtn_" + element[:8], REMOVE_BTN_CSS):
-                    if st.button("Remove", key=f"rm_el_{element}",
-                                 help="Remove this custom element tab"):
-                        st.session_state.saved_custom_elements = [
-                            e for e in saved_custom if e != element
-                        ]
-                        st.session_state.active_element = ELEMENTS[0]
-                        st.rerun()
-
-        hint_col.caption("Save to Favorites" if not is_custom_el else "Save / Remove tab")
-
-        if star:
-            st.session_state.favorite_presets.append({
-                "id": str(uuid.uuid4()),
-                "element": element,
-                "color": st.session_state.get(f"{element}_color", "Keep as is"),
-                "style": st.session_state.get(f"{element}_style", "Keep as is"),
-            })
-            st.toast(f"Saved favorite for {element}.")
 
     # ---- Custom instructions -------------------------------------------- #
     st.markdown("<div class='sb-h'>Add Something Custom</div>", unsafe_allow_html=True)
@@ -1170,13 +2017,21 @@ def sb_design():
         placeholder="e.g. Add a lamppost on the left, add window boxes with flowers",
         label_visibility="collapsed",
     )
-    if st.button("Add Instruction", key="add_custom", use_container_width=True):
-        text = (custom_text or "").strip()
-        if text:
-            st.session_state.custom_instructions.append({
-                "id": str(uuid.uuid4()), "text": text, "selected": False,
-            })
-            st.rerun()
+    _ADD_INSTR_CSS = [
+        "button { background-color:#1a1a1a !important; color:#c9a84c !important;"
+        " border:1px solid #3a3a3a !important; border-radius:8px !important;"
+        " width:100% !important; padding:8px !important; }",
+        "button:hover { border-color:#c9a84c !important; color:#c9a84c !important; }",
+        "button p { color:#c9a84c !important; font-size:13px !important; margin:0 !important; }",
+    ]
+    with stylable_container("add_instr_btn", _ADD_INSTR_CSS):
+        if st.button("Add Instruction", key="add_custom", use_container_width=True):
+            text = (custom_text or "").strip()
+            if text:
+                st.session_state.custom_instructions.append({
+                    "id": str(uuid.uuid4()), "text": text, "selected": False,
+                })
+                st.rerun()
 
     for instr in list(st.session_state.custom_instructions):
         row_text, row_x = st.columns([5, 1])
@@ -1192,11 +2047,27 @@ def sb_design():
 
     # ---- Generate -------------------------------------------------------- #
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-    if st.button("Generate Preview", type="primary", use_container_width=True, key="gen_preview"):
-        run_generate()
+    _GEN_PRIMARY_CSS = [
+        "button { background-color:#c9a84c !important; color:#000000 !important;"
+        " font-weight:700 !important; border:none !important; border-radius:8px !important;"
+        " width:100% !important; padding:12px !important; }",
+        "button:hover { background-color:#d8b85c !important; color:#000000 !important; }",
+        "button p { color:#000000 !important; font-weight:700 !important; font-size:15px !important; margin:0 !important; }",
+    ]
+    _GEN_SECONDARY_CSS = [
+        "button { background-color:#1a1a1a !important; color:#c9a84c !important;"
+        " font-weight:600 !important; border:1px solid #3a3a3a !important; border-radius:8px !important;"
+        " width:100% !important; padding:9px !important; margin-top:6px !important; }",
+        "button:hover { border-color:#c9a84c !important; color:#c9a84c !important; }",
+        "button p { color:#c9a84c !important; font-size:13px !important; margin:0 !important; }",
+    ]
+    with stylable_container("gen_preview_btn", _GEN_PRIMARY_CSS):
+        if st.button("Generate Preview", use_container_width=True, key="gen_preview"):
+            run_generate()
 
-    if st.button("Generate 3 Variations", use_container_width=True, key="gen_var"):
-        _run_generate_variations()
+    with stylable_container("gen_var_btn", _GEN_SECONDARY_CSS):
+        if st.button("Generate 3 Variations", use_container_width=True, key="gen_var"):
+            _run_generate_variations()
 
 
 def _run_generate_variations():
@@ -1207,18 +2078,19 @@ def _run_generate_variations():
         return
     target = None
     for element in ELEMENTS:
-        if (st.session_state.get(f"{element}_color") != "Keep as is" or
-                st.session_state.get(f"{element}_style") != "Keep as is"):
+        if st.session_state.get(f"{element}_color", "Keep as is") != "Keep as is":
             target = element
             break
     if not target:
         st.warning("Select a change on at least one element first.")
         return
-    style_opts = [s for s in ELEMENT_STYLES[target] if s not in ("Keep as is", "Custom")][:3]
+    # Vary across the first three texture options valid for the target element.
+    swatch_opts = [t for t in ELEMENT_TEXTURES.get(target, ELEMENT_TEXTURES["Siding"])
+                   if t != "Custom"][:3]
     base_edits = build_edits_from_state()
     results = generate_variations(
         st.session_state.original_image_bytes, base_edits,
-        st.session_state.custom_instructions, target, style_opts,
+        st.session_state.custom_instructions, target, swatch_opts,
     )
     batch = []
     for _, image_bytes, option in results:
@@ -1252,14 +2124,14 @@ def sb_projects():
             "element_state": {
                 k: st.session_state.get(k)
                 for el in ELEMENTS
-                for k in (f"{el}_color", f"{el}_style", f"{el}_custom_color",
-                          f"{el}_custom_style", f"{el}_price", f"{el}_note")
+                for k in (f"{el}_color", f"{el}_texture", f"{el}_custom_color",
+                          f"{el}_price", f"{el}_note")
             },
             "custom_element_state": {
                 k: st.session_state.get(k)
                 for el in saved_custom
-                for k in (f"{el}_color", f"{el}_style", f"{el}_custom_color",
-                          f"{el}_custom_style", f"{el}_price", f"{el}_note")
+                for k in (f"{el}_color", f"{el}_texture", f"{el}_custom_color",
+                          f"{el}_price", f"{el}_note")
             },
             "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
         }
@@ -1350,18 +2222,21 @@ def render_sidebar():
         " display:flex !important; align-items:center !important;"
         " justify-content:flex-start !important; text-align:left !important;"
     )
-    _NAV_ACTIVE = (
+    _NAV_P = ("button p { text-align:left !important; width:100% !important;"
+              " margin:0 !important; font-size:15px !important; }")
+    # List form keeps button:hover / button p scoped to each nav container.
+    _NAV_ACTIVE = [
         f"button {{ background-color:#c9a84c !important; color:#000000 !important;"
-        f" font-weight:700 !important;{_NAV_BTN_BASE} }}"
-        " button:hover { background-color:#c9a84c !important; color:#000000 !important; }"
-        " button p { text-align:left !important; width:100% !important; margin:0 !important; font-size:15px !important; }"
-    )
-    _NAV_INACTIVE = (
+        f" font-weight:700 !important;{_NAV_BTN_BASE} }}",
+        "button:hover { background-color:#c9a84c !important; color:#000000 !important; }",
+        _NAV_P,
+    ]
+    _NAV_INACTIVE = [
         f"button {{ background-color:#1a1a1a !important; color:#aaaaaa !important;"
-        f" font-weight:500 !important;{_NAV_BTN_BASE} }}"
-        " button:hover { background-color:#c9a84c !important; color:#000000 !important; }"
-        " button p { text-align:left !important; width:100% !important; margin:0 !important; font-size:15px !important; }"
-    )
+        f" font-weight:500 !important;{_NAV_BTN_BASE} }}",
+        "button:hover { background-color:#c9a84c !important; color:#000000 !important; }",
+        _NAV_P,
+    ]
 
     with st.sidebar:
         st.markdown(
@@ -1400,116 +2275,31 @@ def render_header():
 
 
 def render_icon_toolbar():
-    """Pure HTML toolbar: all 5 SVG circle buttons in one st.components.v1.html() call.
-
-    Python-side actions (B/A toggle, PDF) are routed through two hidden
-    Streamlit buttons. The iframe JS sends window.parent.postMessage then immediately
-    finds the matching hidden button by its unique text content and calls .click() on it.
-    Download uses a base64 data-URI <a> tag. Share uses the clipboard API directly.
-    """
-    _HIDE = (
-        "button{position:absolute!important;left:-9999px!important;"
-        "width:1px!important;height:1px!important;opacity:0!important;"
-        "pointer-events:none!important;}"
-    )
-
-    # Hidden Streamlit buttons — visually removed, still clickable via JS .click().
-    with stylable_container("hb_ba_w",  _HIDE):
-        _ba   = st.button("__tb_ba__",   key="hb_ba")
-    with stylable_container("hb_pdf_w", _HIDE):
-        _pdf  = st.button("__tb_pdf__",  key="hb_pdf")
-    if _ba:
-        st.session_state.show_slider = not st.session_state.show_slider
-    if _pdf:
-        try:
-            st.session_state.pdf_bytes = export_pdf(
-                st.session_state.current_project_name or "Exterior Design",
-                st.session_state.original_image_bytes,
-                st.session_state.current_image_bytes,
-                st.session_state.edit_history,
-                st.session_state.custom_instructions,
-                st.session_state.watermark_text,
-            )
-        except Exception as exc:  # noqa: BLE001
-            st.error(f"PDF export failed: {exc}")
-    # Data URIs for download and share payload.
-    img_b64   = base64.b64encode(st.session_state.current_image_bytes).decode()
-    share_enc = base64.b64encode(json.dumps({
-        "edits":   st.session_state.edit_history,
-        "customs": st.session_state.custom_instructions,
-    }).encode()).decode()
-
-    # Shared inline styles.
+    """Minimal toolbar: just the Download button as a data-URI anchor."""
+    img_b64 = base64.b64encode(st.session_state.current_image_bytes).decode()
     BTN = (
         "width:44px;height:44px;border-radius:50%;background:#1e1e1e;"
         "border:1px solid #c9a84c;cursor:pointer;"
         "display:flex;align-items:center;justify-content:center;"
         "transition:background .18s,box-shadow .18s;"
-        "padding:0;box-sizing:border-box;"
+        "padding:0;box-sizing:border-box;text-decoration:none;"
     )
     HVR = (
-        'onmouseover="this.style.background=\'rgba(201,168,76,0.10)\';'
-        'this.style.boxShadow=\'0 0 12px rgba(201,168,76,0.25)\';" '
-        'onmouseout="this.style.background=\'#1e1e1e\';this.style.boxShadow=\'none\';"'
+        'onmouseover="this.style.background=\'rgba(201,168,76,0.10)\';" '
+        'onmouseout="this.style.background=\'#1e1e1e\';"'
     )
-
     html = f"""
 <div style="display:flex;flex-direction:column;align-items:center;gap:8px;padding:4px 0;">
-
-  <button title="Before / After" style="{BTN}" {HVR} onclick="act('ba')">
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-      <rect x="2" y="2" width="12" height="12" fill="none" stroke="#c9a84c" stroke-width="1.5"/>
-      <rect x="6" y="6" width="12" height="12" fill="none" stroke="#c9a84c" stroke-width="1.5"/>
-    </svg>
-  </button>
-
   <a href="data:image/png;base64,{img_b64}" download="exterior_design.png"
-     title="Download" style="{BTN};text-decoration:none;" {HVR}
-     onclick="window.parent.postMessage({{action:'dl'}},'*');">
+     title="Download" style="{BTN}" {HVR}>
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
       <path d="M12 3v12M6 11l6 6 6-6M4 20h16" stroke="#c9a84c" stroke-width="1.5"
             fill="none" stroke-linecap="round" stroke-linejoin="round"/>
     </svg>
   </a>
-
-  <button title="Export PDF" style="{BTN}" {HVR} onclick="act('pdf')">
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-      <path d="M4 4h10l4 4v14H4V4z" stroke="#c9a84c" stroke-width="1.5" fill="none"/>
-      <path d="M14 4v4h4" stroke="#c9a84c" stroke-width="1.5" fill="none"/>
-      <path d="M8 12h6M8 15h4" stroke="#c9a84c" stroke-width="1.5" stroke-linecap="round"/>
-    </svg>
-  </button>
-
-  <button title="Copy Share Link" style="{BTN}" {HVR} onclick="shareFn()">
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-      <path d="M4 12v6h14v-6M12 3v10M8 7l4-4 4 4" stroke="#c9a84c" stroke-width="1.5"
-            fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-    </svg>
-  </button>
-
 </div>
-<script>
-function act(action) {{
-  window.parent.postMessage({{action: action}}, '*');
-  var btns = window.parent.document.querySelectorAll('button');
-  for (var i = 0; i < btns.length; i++) {{
-    if ((btns[i].textContent || '').trim() === '__tb_' + action + '__') {{
-      btns[i].click();
-      return;
-    }}
-  }}
-}}
-function shareFn() {{
-  window.parent.postMessage({{action: 'share'}}, '*');
-  var url = window.parent.location.origin + window.parent.location.pathname
-            + '?design={share_enc}';
-  if (window.parent.navigator.clipboard) {{
-    window.parent.navigator.clipboard.writeText(url);
-  }}
-}}
-</script>
 """
-    st.components.v1.html(html, height=300)
+    st.components.v1.html(html, height=70)
 
 
 def render_before_after_slider():
@@ -1531,6 +2321,7 @@ def render_before_after_slider():
     height = int(700 * aspect)
 
     html = f"""
+    <div style="display:flex;justify-content:center;width:100%;">
     <div style="position:relative;width:700px;max-width:100%;height:{height}px;
                 overflow:hidden;border-radius:14px;user-select:none;
                 border:1px solid rgba(201,168,76,0.35);
@@ -1552,6 +2343,7 @@ def render_before_after_slider():
       <div style="position:absolute;top:12px;right:12px;background:rgba(201,168,76,0.85);
            color:#0f0f0f;padding:4px 12px;border-radius:6px;font-family:Inter,sans-serif;
            font-size:12px;letter-spacing:1px;font-weight:600;">AFTER</div>
+    </div>
     </div>
     <script>
       const wrap = document.getElementById('ba-wrap');
@@ -1777,18 +2569,92 @@ def render_timeline():
 
 
 # --------------------------------------------------------------------------- #
+# Floating sidebar re-open button (injected into parent document)
+# --------------------------------------------------------------------------- #
+def render_sidebar_float_btn():
+    """Inject a fixed pill button into the parent page that appears only when
+    the Streamlit sidebar is collapsed, allowing the user to re-open it."""
+    st.components.v1.html(
+        """<script>
+(function() {
+    var doc = window.parent.document;
+    var BTNID = 'eds-sidebar-float-btn';
+
+    if (!doc.getElementById(BTNID)) {
+        var btn = doc.createElement('div');
+        btn.id = BTNID;
+        btn.innerHTML = (
+            '<span style="font-size:14px;line-height:1;margin-bottom:2px;">&#9654;</span>'
+            + '<span style="font-size:10px;font-weight:700;letter-spacing:1.5px;">MENU</span>'
+        );
+        btn.style.cssText = [
+            'position:fixed',
+            'left:0',
+            'top:50%',
+            'transform:translateY(-50%)',
+            'background:#1e1e1e',
+            'color:#c9a84c',
+            'border:1px solid #c9a84c',
+            'border-left:none',
+            'border-radius:0 20px 20px 0',
+            'padding:14px 16px 14px 10px',
+            'display:none',
+            'flex-direction:column',
+            'align-items:center',
+            'gap:5px',
+            'cursor:pointer',
+            'z-index:99999',
+            'font-family:Inter,sans-serif',
+            'box-shadow:3px 0 12px rgba(0,0,0,0.6)',
+            'transition:transform 0.15s ease,box-shadow 0.15s ease',
+            'user-select:none',
+        ].join(';');
+
+        btn.addEventListener('mouseenter', function() {
+            btn.style.transform = 'translateY(-50%) translateX(3px)';
+            btn.style.boxShadow = '5px 0 16px rgba(201,168,76,0.35)';
+        });
+        btn.addEventListener('mouseleave', function() {
+            btn.style.transform = 'translateY(-50%)';
+            btn.style.boxShadow = '3px 0 12px rgba(0,0,0,0.6)';
+        });
+        btn.addEventListener('click', function() {
+            var expandBtn = doc.querySelector('[data-testid="collapsedControl"]');
+            if (expandBtn) expandBtn.click();
+        });
+
+        doc.body.appendChild(btn);
+    }
+
+    function syncVisibility() {
+        var floatBtn = doc.getElementById(BTNID);
+        if (!floatBtn) return;
+        var collapsed = doc.querySelector('[data-testid="collapsedControl"]');
+        floatBtn.style.display = collapsed ? 'flex' : 'none';
+    }
+
+    if (!window.__eds_sb_watcher) {
+        window.__eds_sb_watcher = setInterval(syncVisibility, 250);
+    }
+    syncVisibility();
+})();
+        </script>""",
+        height=0,
+    )
+
+
+# --------------------------------------------------------------------------- #
 # --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
 def main():
     """Application entry point: configure the page, inject the theme, initialise
     state, and render either the presentation view or the full studio."""
-    st.set_page_config(page_title="Exterior Design Studio", layout="wide")
+    st.set_page_config(page_title="Exterior Design Studio", layout="wide", initial_sidebar_state="expanded")
     st.markdown(THEME_CSS, unsafe_allow_html=True)
     init_state()
     apply_pending_preset()
 
-    render_sidebar()
     render_header()
 
     # ---- Image upload ---------------------------------------------------- #
@@ -1809,25 +2675,73 @@ def main():
         st.info("Upload a photo of the home's exterior to begin.")
         return
 
-    # ---- Image + icon toolbar -------------------------------------------- #
-    img_col, tb_col = st.columns([13, 1])
-    with img_col:
-        with stylable_container("image_frame", IMAGE_FRAME_CSS):
-            st.image(st.session_state.current_image_bytes, width=700)
-    with tb_col:
-        render_icon_toolbar()
+    # ---- Image + toolbar ------------------------------------------------- #
+    # The placeholder is created here — before render_sidebar() — so that
+    # run_generate() (called from the sidebar's Generate button) can write the
+    # spinner into it immediately, before the blocking edit_image() call.
+    # The frame CSS is scoped to .st-key-hero_image_row to avoid leaking the
+    # gold border/radius onto every first-column element in the sidebar.
+    global _image_placeholder
+    with st.container(key="hero_image_row"):
+        st.markdown("""
+<style>
+.st-key-hero_image_row div[data-testid="stHorizontalBlock"] > div:first-child > div[data-testid="stVerticalBlock"] {
+    background: #161616;
+    border: 2px solid rgba(201,168,76,0.70);
+    border-radius: 18px;
+    overflow: hidden;
+    box-shadow: 0 10px 36px rgba(0,0,0,0.55);
+    padding: 0;
+}
+.st-key-hero_image_row div[data-testid="stHorizontalBlock"] > div:first-child img {
+    width: 100% !important;
+    max-width: none !important;
+    height: auto !important;
+    border-radius: 18px;
+    display: block;
+}
+</style>
+""", unsafe_allow_html=True)
+        img_col, tb_col = st.columns([13, 1])
+        with img_col:
+            _image_placeholder = st.empty()
+            _image_placeholder.image(
+                st.session_state.current_image_bytes, use_container_width=True
+            )
+        with tb_col:
+            render_icon_toolbar()
 
-    if st.session_state.pdf_bytes:
-        st.download_button(
-            "Download PDF Proposal",
-            data=st.session_state.pdf_bytes,
-            file_name="exterior_proposal.pdf",
-            mime="application/pdf",
-            key="pdf_dl",
-        )
+    # Sidebar rendered AFTER the placeholder so run_generate() can reach it.
+    # Sidebar content always renders in the left panel regardless of call order.
+    render_sidebar()
+    render_sidebar_float_btn()
+
+    # ---- Before/After toggle (only if a generation has happened) ----------- #
+    _orig = st.session_state.original_image_bytes
+    _curr = st.session_state.current_image_bytes
+    _ba_generated = _orig is not None and _curr is not None and _curr != _orig
+    if _ba_generated:
+        _ba_active = st.session_state.get("show_before_after", False)
+        _BA_CSS = [
+            "button { background:#1e1e1e !important; color:#c9a84c !important;"
+            " border:1px solid #c9a84c !important; border-radius:8px !important;"
+            " padding:8px 20px !important; font-size:13px !important; }",
+            "button:hover { background:rgba(201,168,76,0.1) !important; }",
+            "button p { color:#c9a84c !important; font-size:13px !important; margin:0 !important; }",
+        ]
+        st.markdown("<br>", unsafe_allow_html=True)
+        _, ba_col, _ = st.columns([1, 2, 1])
+        with ba_col:
+            with stylable_container("ba_toggle_btn", _BA_CSS):
+                if st.button("⧉  Before / After", key="ba_toggle", use_container_width=True):
+                    st.session_state["show_before_after"] = not _ba_active
+                    st.rerun()
+        st.markdown("<br>", unsafe_allow_html=True)
 
     # ---- Before/After slider --------------------------------------------- #
-    if st.session_state.show_slider:
+    if (st.session_state.get("show_before_after")
+            and st.session_state.original_image_bytes
+            and st.session_state.current_image_bytes):
         render_before_after_slider()
 
     # ---- Tabbed lower panels (manual session_state tabs) ----------------- #
@@ -1839,28 +2753,69 @@ def main():
         ("compare",  "Compare"),
         ("timeline", "Design History"),
     ]
-    _ACTIVE_CSS = """
-button {
-    background-color:#c9a84c !important; color:#000000 !important;
-    border:none !important; border-radius:8px 8px 0 0 !important;
-    font-weight:700 !important; width:100% !important;
-}
-button:hover { background-color:#c9a84c !important; color:#000000 !important; }
-"""
-    _INACTIVE_CSS = """
-button {
-    background-color:#1e1e1e !important; color:#888888 !important;
-    border:none !important; border-radius:8px 8px 0 0 !important;
-    font-weight:500 !important; width:100% !important;
-}
-button:hover { background-color:#252525 !important; color:#c9a84c !important; }
-"""
+
+    # Inject CSS targeting st.container(key=f"btab_btn_{tid}") wrappers.
+    # st.container(key="btab_btn_history") → class st-key-btab_btn_history (no double-prefix).
+    _active_tid = st.session_state.get("active_bottom_tab", "history")
+    st.markdown(f"""
+<style>
+.st-key-btab_btn_history button,
+.st-key-btab_btn_quote button,
+.st-key-btab_btn_compare button,
+.st-key-btab_btn_timeline button {{
+    border-radius: 8px 8px 0 0 !important;
+    min-height: 36px !important; height: 36px !important;
+    font-size: 13px !important; padding: 8px 4px !important;
+    width: 100% !important; border: none !important;
+    outline: none !important; box-sizing: border-box !important;
+    background-color: #1e1e1e !important;
+    color: #aaaaaa !important; font-weight: 500 !important;
+}}
+.st-key-btab_btn_history button:hover,
+.st-key-btab_btn_quote button:hover,
+.st-key-btab_btn_compare button:hover,
+.st-key-btab_btn_timeline button:hover {{
+    background-color: #252525 !important; color: #c9a84c !important;
+}}
+.st-key-btab_btn_history button:focus,
+.st-key-btab_btn_history button:active,
+.st-key-btab_btn_history button:focus-visible,
+.st-key-btab_btn_quote button:focus,
+.st-key-btab_btn_quote button:active,
+.st-key-btab_btn_quote button:focus-visible,
+.st-key-btab_btn_compare button:focus,
+.st-key-btab_btn_compare button:active,
+.st-key-btab_btn_compare button:focus-visible,
+.st-key-btab_btn_timeline button:focus,
+.st-key-btab_btn_timeline button:active,
+.st-key-btab_btn_timeline button:focus-visible {{
+    border-radius: 8px 8px 0 0 !important;
+    outline: none !important; box-shadow: none !important;
+}}
+.st-key-btab_btn_history button p,
+.st-key-btab_btn_quote button p,
+.st-key-btab_btn_compare button p,
+.st-key-btab_btn_timeline button p {{
+    color: inherit !important; font-size: 13px !important; margin: 0 !important;
+}}
+.st-key-btab_btn_{_active_tid} button {{
+    background-color: #c9a84c !important;
+    color: #000000 !important; font-weight: 700 !important;
+}}
+.st-key-btab_btn_{_active_tid} button:hover {{
+    background-color: #c9a84c !important; color: #000000 !important;
+}}
+.st-key-btab_btn_{_active_tid} button p {{
+    color: #000000 !important;
+}}
+</style>
+""", unsafe_allow_html=True)
+
     tab_cols = st.columns(len(_TABS))
     for col, (tid, tlabel) in zip(tab_cols, _TABS):
-        is_active = st.session_state.active_bottom_tab == tid
         with col:
-            with stylable_container(f"btab_{tid}", _ACTIVE_CSS if is_active else _INACTIVE_CSS):
-                if st.button(tlabel, key=f"btab_btn_{tid}", use_container_width=True):
+            with st.container(key=f"btab_btn_{tid}"):
+                if st.button(tlabel, key=f"btab_{tid}", use_container_width=True):
                     st.session_state.active_bottom_tab = tid
                     st.rerun()
 
