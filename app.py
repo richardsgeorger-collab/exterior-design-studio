@@ -54,10 +54,11 @@ BORDER = "#2a2a2a"
 # --------------------------------------------------------------------------- #
 ELEMENT_COLORS = {
     "Siding": ["Keep as is", "White", "Beige", "Gray", "Navy Blue", "Black", "Brown", "Green", "Red", "Yellow", "Custom"],
-    "Roof": ["Keep as is", "Black", "Charcoal", "Brown", "Gray", "Green", "Red", "Blue", "White", "Custom"],
+    "Roof": ["Keep as is", "Black", "Charcoal", "Brown", "Gray", "Green", "Red", "Navy Blue", "White", "Custom"],
     "Front Door": ["Keep as is", "Black", "White", "Red", "Navy Blue", "Forest Green", "Yellow", "Orange", "Purple", "Natural Wood", "Custom"],
     "Shutters": ["Keep as is", "Black", "White", "Green", "Navy Blue", "Brown", "Gray", "Red", "Custom"],
     "Garage Door": ["Keep as is", "White", "Black", "Gray", "Brown", "Beige", "Navy Blue", "Custom"],
+    "Gables": ["Keep as is", "White", "Black", "Gray", "Beige", "Navy", "Brown", "Green", "Red", "Yellow", "Custom"],
 }
 
 ELEMENT_STYLES = {
@@ -66,6 +67,7 @@ ELEMENT_STYLES = {
     "Front Door": ["Keep as is", "Solid panel", "Glass panels", "Carriage style", "Modern flat", "Craftsman", "Arched", "Custom"],
     "Shutters": ["Keep as is", "Louvered", "Board and batten", "Raised panel", "Flat panel", "Remove shutters entirely", "Custom"],
     "Garage Door": ["Keep as is", "Raised panel", "Carriage style", "Modern flat", "Full glass", "Wood plank", "Custom"],
+    "Gables": ["Keep as is", "Smooth Paint", "Board and Batten", "Cedar Shingles", "Vinyl Lap", "Wood Panels", "Decorative Trim", "Match Siding", "Custom"],
 }
 
 ELEMENTS = list(ELEMENT_COLORS.keys())
@@ -111,6 +113,10 @@ ELEMENT_TEXTURES = {
     "Garage Door": [
         "Raised Panel", "Carriage Style", "Modern Flat",
         "Full Glass", "Wood Plank", "Flush Panel", "Custom",
+    ],
+    "Gables": [
+        "Smooth Paint", "Board and Batten", "Cedar Shingles",
+        "Vinyl Lap", "Wood Panels", "Decorative Trim", "Match Siding", "Custom",
     ],
 }
 
@@ -368,9 +374,24 @@ section[data-testid="stSidebar"][aria-expanded="false"] {
 """
 
 # Reusable stylable_container CSS snippets.
-# Module-level reference to the image st.empty() placeholder.
-# Set in main() before render_sidebar() runs, so run_generate() can fill it.
+# Module-level references to st.empty() placeholders set in main() before
+# render_sidebar() runs, so sidebar callbacks can write into the main area.
 _image_placeholder = None
+_var_placeholder = None   # progress bar + variation cards during generation
+
+# Pre-encoded hero demo images (loaded once at import time).
+def _load_hero_images():
+    import pathlib
+    before_path = pathlib.Path("/Users/georgerichards/Downloads/premier-design-custom-homes-westfield-nj-front-elevation-e1604677087354.jpg")
+    after_path  = pathlib.Path("/Users/georgerichards/Downloads/before:after.jpg")
+    try:
+        b = base64.b64encode(before_path.read_bytes()).decode()
+        a = base64.b64encode(after_path.read_bytes()).decode()
+        return b, a
+    except Exception:
+        return None, None
+
+_HERO_BEFORE_B64, _HERO_AFTER_B64 = _load_hero_images()
 
 _SPINNER_HTML = """
 <div style="
@@ -573,19 +594,33 @@ def build_instruction(edit_history, custom_instructions):
     """
     changes = []
     for edit in edit_history:
-        color = edit.get("color", "Keep as is")
-        style = edit.get("style", "Keep as is")
+        raw_color = edit.get("color", "Keep as is")
+        raw_style = edit.get("style", "Keep as is")
 
-        # Skip the edit entirely when nothing changes.
-        if color in (None, "", "Keep as is") and style in (None, "", "Keep as is"):
+        color = raw_color == "Custom" and ((edit.get("custom_color") or "").strip() or "Custom color") or raw_color
+        style = raw_style == "Custom" and ((edit.get("custom_style") or "").strip() or "Custom style") or raw_style
+
+        has_color = color not in (None, "", "Keep as is")
+        has_style = style not in (None, "", "Keep as is")
+
+        if not has_color and not has_style:
             continue
 
-        description = describe_edit(edit).lower()
-        if not description or description == "keep as is":
-            continue
+        element_raw = edit.get("element", "element")
+        element = element_raw.lower()
+        target = "gable ends and gable trim" if element_raw == "Gables" else element
 
-        element = edit.get("element", "element").lower()
-        changes.append(f"change the {element} to {description}")
+        if has_color and has_style:
+            changes.append(f"Change the {target} to {color.lower()} {style.lower()}")
+        elif has_color:
+            changes.append(
+                f"Repaint the {target} to {color.lower()} — keep the exact same material, "
+                f"texture, and surface pattern completely unchanged, only the color should change"
+            )
+        else:
+            changes.append(
+                f"Change the {target} material to {style.lower()} — keep the existing color tone as close as possible"
+            )
 
     # Append all custom instructions verbatim.
     for instr in custom_instructions:
@@ -602,6 +637,8 @@ def build_instruction(edit_history, custom_instructions):
         f"Think of yourself as a master Photoshop retoucher who is painting new materials onto specific surfaces of an existing photograph while leaving every other pixel completely untouched. "
         f"Your reputation depends on the output being indistinguishable from the original photograph except for the explicitly requested changes. "
         f"\n\nTHE ONLY PERMITTED CHANGES — DO THESE AND NOTHING ELSE: {changes_text}. "
+        f"Do not change the color or material of the gable ends or gable trim unless explicitly listed above as a change to make. "
+        f"If the gables are not mentioned in the changes above, they must remain exactly as they appear in the original photo. "
         f"\n\nROOFLINE — ABSOLUTE PRESERVATION REQUIRED: "
         f"Before making any changes, mentally trace the exact silhouette of the roofline in the original photo. "
         f"Count every single roof peak, gable, dormer, hip, valley, and ridge line. "
@@ -1060,6 +1097,7 @@ def init_state():
     st.session_state.setdefault("pdf_bytes", None)
     st.session_state.setdefault("uploaded_sig", None)
     st.session_state.setdefault("last_batch_ids", [])
+    st.session_state.setdefault("_var_display", [])
     st.session_state.setdefault("active_element", "Siding")
     st.session_state.setdefault("saved_custom_elements", [])
 
@@ -1650,6 +1688,39 @@ def generate_texture_previews() -> dict:
         draw.line([0, y, W - 1, y], fill=(130, 130, 130), width=1)
     out["Flush Panel"] = _img_to_b64(img)
 
+    # ---- Gables-specific textures --------------------------------------------
+
+    # Smooth Paint: uniform flat fill with very faint noise
+    img = Image.new("RGB", (W, H), (108, 108, 108))
+    draw = ImageDraw.Draw(img)
+    for _ in range(120):
+        x2, y2 = rng.randint(0, W - 1), rng.randint(0, H - 1)
+        c = rng.randint(102, 114)
+        draw.point((x2, y2), fill=(c, c, c))
+    out["Smooth Paint"] = _img_to_b64(img)
+
+    # Decorative Trim: horizontal bands with small raised bead detail
+    img = Image.new("RGB", (W, H), (95, 95, 95))
+    draw = ImageDraw.Draw(img)
+    for iy in range(0, H, 16):
+        draw.rectangle([0, iy + 2, W - 1, iy + 12], fill=(108, 108, 108))
+        draw.line([0, iy + 2, W - 1, iy + 2], fill=(148, 148, 148), width=1)
+        draw.line([0, iy + 3, W - 1, iy + 3], fill=(128, 128, 128), width=1)
+        draw.line([0, iy + 11, W - 1, iy + 11], fill=(65, 65, 65), width=1)
+        draw.line([0, iy + 12, W - 1, iy + 12], fill=(50, 50, 50), width=1)
+    out["Decorative Trim"] = _img_to_b64(img)
+
+    # Match Siding: vertical boards (reuses Board and Batten pattern, lighter fill)
+    img = Image.new("RGB", (W, H), (105, 105, 105))
+    draw = ImageDraw.Draw(img)
+    x = 0
+    while x < W:
+        c = rng.randint(90, 120)
+        draw.rectangle([x, 0, x + 18, H - 1], fill=(c, c, c))
+        draw.line([x + 18, 0, x + 18, H - 1], fill=(55, 55, 55), width=1)
+        x += 19
+    out["Match Siding"] = _img_to_b64(img)
+
     return out
 
 
@@ -1972,12 +2043,17 @@ def sb_design():
         unsafe_allow_html=True,
     )
 
-    # Two rows of three: five built-in elements plus the Custom tab.
-    for i in range(0, len(all_elements_for_tabs), 3):
-        if i > 0:
-            st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
-        for col, el_name in zip(st.columns(3), all_elements_for_tabs[i:i + 3]):
-            _el_button(col, el_name)
+    # Row 1: Siding, Roof, Front Door
+    for col, el_name in zip(st.columns(3), ["Siding", "Roof", "Front Door"]):
+        _el_button(col, el_name)
+    st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+    # Row 2: Shutters, Garage Door, Gables
+    for col, el_name in zip(st.columns(3), ["Shutters", "Garage Door", "Gables"]):
+        _el_button(col, el_name)
+    st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+    # Row 3: Custom centered in the middle column
+    c_left, c_mid, c_right = st.columns(3)
+    _el_button(c_mid, "Custom")
 
     element = current
 
@@ -2071,36 +2147,79 @@ def sb_design():
 
 
 def _run_generate_variations():
-    """Find the first changed element and generate three style variations of
-    it (logic preserved from the original sidebar implementation)."""
+    """Find the first changed element and generate 3 texture variations.
+
+    Uses _var_placeholder (set in main()) for progress bar and results so that
+    all output appears in the main area, not the sidebar.
+    """
     if not st.session_state.original_image_bytes:
-        st.error("Upload a house photo first.")
+        st.sidebar.error("Upload a house photo first.")
         return
+
+    # Find first element with any non-default color OR texture selection.
     target = None
     for element in ELEMENTS:
-        if st.session_state.get(f"{element}_color", "Keep as is") != "Keep as is":
+        has_color = st.session_state.get(f"{element}_color", "Keep as is") not in ("", "Keep as is")
+        has_texture = st.session_state.get(f"{element}_texture", "") not in ("", "Keep as is")
+        if has_color or has_texture:
             target = element
             break
     if not target:
-        st.warning("Select a change on at least one element first.")
+        st.sidebar.warning("Select a change on at least one element first.")
         return
-    # Vary across the first three texture options valid for the target element.
-    swatch_opts = [t for t in ELEMENT_TEXTURES.get(target, ELEMENT_TEXTURES["Siding"])
-                   if t != "Custom"][:3]
+
+    # Top 3 textures for the target element (skip Custom and Keep as is).
+    tex_options = [t for t in ELEMENT_TEXTURES.get(target, ELEMENT_TEXTURES["Siding"])
+                   if t not in ("Custom", "Keep as is")][:3]
     base_edits = build_edits_from_state()
-    results = generate_variations(
-        st.session_state.original_image_bytes, base_edits,
-        st.session_state.custom_instructions, target, swatch_opts,
-    )
+    n = len(tex_options)
+
+    # Show progress in the main area via _var_placeholder.
+    container = _var_placeholder if _var_placeholder is not None else st
+    progress_slot = container.empty() if _var_placeholder is not None else st.empty()
+    progress_bar = progress_slot.progress(0, text=f"Generating variation 1 of {n}…")
+
+    results = []
+    for i, tex in enumerate(tex_options):
+        temp_edit = {
+            "id": str(uuid.uuid4()),
+            "element": target,
+            "color": st.session_state.get(f"{target}_color", "Keep as is"),
+            "style": tex,
+            "custom_color": st.session_state.get(f"{target}_custom_color", ""),
+            "custom_style": "",
+            "note": "",
+            "price": 0.0,
+            "selected": False,
+        }
+        temp_history = [e for e in base_edits if e.get("element") != target] + [temp_edit]
+        try:
+            _, image_bytes = edit_image(
+                st.session_state.original_image_bytes, temp_history,
+                st.session_state.custom_instructions,
+            )
+            results.append((image_bytes, tex))
+        except Exception as exc:
+            st.sidebar.error(f"Variation '{tex}' failed: {exc}")
+        progress_bar.progress((i + 1) / n, text=f"Generated {i + 1} of {n}…")
+
+    progress_slot.empty()
+
     batch = []
-    for _, image_bytes, option in results:
-        var = add_variation(f"{target}: {option}", image_bytes,
+    for image_bytes, tex in results:
+        var = add_variation(f"{target}: {tex}", image_bytes,
                             base_edits, st.session_state.custom_instructions)
         batch.append(var["id"])
     st.session_state.last_batch_ids = batch
+    # Store lightweight display data so render_variation_cards() can render
+    # without re-looking up variations by id on every rerun.
+    st.session_state["_var_display"] = [
+        {"label": f"Option {i + 1}", "name": f"{target}: {tex}", "image_bytes": img_b,
+         "image_bytes_key": var_id}
+        for i, ((img_b, tex), var_id) in enumerate(zip(results, batch))
+    ]
     if results:
-        st.session_state.current_image_bytes = results[0][1]
-        st.success(f"Generated {len(results)} variations of {target}.")
+        st.rerun()
 
 
 def sb_projects():
@@ -2302,6 +2421,163 @@ def render_icon_toolbar():
     st.components.v1.html(html, height=70)
 
 
+def render_hero_landing(file_uploader_key="hero_upload"):
+    """Full-page hero shown before any image is uploaded."""
+    # Title + subtitle — tight top padding so slider fits on screen
+    st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&display=swap');
+</style>
+<div style="text-align:center;padding:10px 0 12px;">
+  <div style="font-family:'Cormorant Garamond',serif;font-size:72px;font-weight:700;
+              color:#c9a84c;letter-spacing:-0.5px;line-height:1.1;">
+    Exterior Design Studio
+  </div>
+  <div style="font-family:'Inter',sans-serif;font-size:18px;color:#888888;
+              margin-top:8px;font-weight:400;">
+    Transform any home in seconds.
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+    # Before/after demo slider + chevron — all in one iframe to avoid extra gaps
+    if _HERO_BEFORE_B64 and _HERO_AFTER_B64:
+        height = int(900 * (667 / 1000))   # source images are 1000×667
+        total_h = height + 80              # slider + caption + chevron + bounce travel + margin
+        demo_html = f"""
+<style>
+@keyframes bounce-chevron {{
+  0%, 100% {{ transform: translateY(0); opacity: 0.7; }}
+  50%       {{ transform: translateY(6px); opacity: 1; }}
+}}
+.hero-chevron {{
+  display: block;
+  margin: 8px auto 20px;
+  width: 24px; height: 14px;
+  overflow: visible;
+  animation: bounce-chevron 1.5s ease-in-out infinite;
+}}
+</style>
+<div style="display:flex;flex-direction:column;align-items:center;width:100%;
+            gap:0;overflow:visible;padding-bottom:4px;">
+  <div style="position:relative;width:900px;max-width:96vw;height:{height}px;
+              overflow:hidden;border-radius:14px;user-select:none;
+              border:2px solid rgba(201,168,76,0.50);
+              box-shadow:0 10px 32px rgba(0,0,0,0.6);" id="hero-wrap">
+    <img src="data:image/jpeg;base64,{_HERO_BEFORE_B64}"
+         style="position:absolute;top:0;left:0;width:900px;height:{height}px;
+                object-fit:cover;" draggable="false"/>
+    <div id="hero-after" style="position:absolute;top:0;left:0;width:50%;
+         height:{height}px;overflow:hidden;">
+      <img src="data:image/jpeg;base64,{_HERO_AFTER_B64}"
+           style="width:900px;height:{height}px;object-fit:cover;" draggable="false"/>
+    </div>
+    <div id="hero-divider" style="position:absolute;top:0;left:50%;width:3px;
+         height:{height}px;background:#c9a84c;cursor:ew-resize;
+         box-shadow:0 0 12px rgba(201,168,76,0.9);transform:translateX(-50%);"></div>
+    <div style="position:absolute;top:12px;left:14px;background:rgba(0,0,0,0.65);
+         color:#fff;padding:3px 10px;border-radius:6px;
+         font-family:Inter,sans-serif;font-size:11px;letter-spacing:1px;">BEFORE</div>
+    <div style="position:absolute;top:12px;right:14px;background:rgba(201,168,76,0.90);
+         color:#0f0f0f;padding:3px 10px;border-radius:6px;
+         font-family:Inter,sans-serif;font-size:11px;letter-spacing:1px;
+         font-weight:700;">AFTER</div>
+  </div>
+  <div style="text-align:center;color:#c9a84c;font-size:12px;
+              font-family:Inter,sans-serif;margin-top:8px;margin-bottom:2px;">
+    Drag the slider to see the transformation
+  </div>
+  <svg class="hero-chevron" viewBox="0 0 24 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <polyline points="2,2 12,12 22,2" stroke="#c9a84c" stroke-width="2.5"
+              stroke-linecap="round" stroke-linejoin="round"
+              transform="rotate(180 12 7)"/>
+  </svg>
+</div>
+<script>
+(function(){{
+  const wrap     = document.getElementById('hero-wrap');
+  const afterBox = document.getElementById('hero-after');
+  const divider  = document.getElementById('hero-divider');
+  let dragging = false;
+  function setPos(clientX) {{
+    const rect = wrap.getBoundingClientRect();
+    let x = Math.max(0, Math.min(clientX - rect.left, rect.width));
+    const pct = (x / rect.width) * 100;
+    afterBox.style.width = pct + '%';
+    divider.style.left   = pct + '%';
+  }}
+  divider.addEventListener('mousedown', (e) => {{ dragging = true; e.preventDefault(); }});
+  window.addEventListener('mouseup',   () => dragging = false);
+  window.addEventListener('mousemove', (e) => {{ if (dragging) setPos(e.clientX); }});
+  wrap.addEventListener('click', (e) => setPos(e.clientX));
+  wrap.addEventListener('touchstart', (e) => {{ dragging = true; setPos(e.touches[0].clientX); e.preventDefault(); }}, {{passive:false}});
+  window.addEventListener('touchend',   () => dragging = false);
+  window.addEventListener('touchmove',  (e) => {{ if (dragging) setPos(e.touches[0].clientX); }});
+}})();
+</script>
+"""
+        st.components.v1.html(demo_html, height=total_h)
+
+    # Feature callouts row
+    st.markdown("""
+<div style="display:flex;align-items:center;justify-content:center;gap:0;
+            margin:14px auto 14px;max-width:480px;">
+  <div style="flex:1;text-align:center;font-family:'Inter',sans-serif;
+              font-size:13px;color:#c9a84c;font-weight:500;letter-spacing:0.4px;">
+    Any house
+  </div>
+  <div style="width:1px;height:18px;background:rgba(201,168,76,0.35);flex-shrink:0;"></div>
+  <div style="flex:1;text-align:center;font-family:'Inter',sans-serif;
+              font-size:13px;color:#c9a84c;font-weight:500;letter-spacing:0.4px;">
+    Any style
+  </div>
+  <div style="width:1px;height:18px;background:rgba(201,168,76,0.35);flex-shrink:0;"></div>
+  <div style="flex:1;text-align:center;font-family:'Inter',sans-serif;
+              font-size:13px;color:#c9a84c;font-weight:500;letter-spacing:0.4px;">
+    In seconds
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+    # Upload heading + pulsing dropzone
+    st.markdown("""
+<div style="text-align:center;font-family:'Playfair Display',serif;font-size:16px;
+            color:#c9a84c;margin-bottom:10px;font-weight:600;">
+  Upload your house to get started
+</div>
+<style>
+@keyframes pulse-border {
+    0%   { border-color: rgba(201,168,76,0.3); }
+    50%  { border-color: rgba(201,168,76,0.9); }
+    100% { border-color: rgba(201,168,76,0.3); }
+}
+section[data-testid="stFileUploaderDropzone"] {
+    border: 2px solid rgba(201,168,76,0.3) !important;
+    border-radius: 14px !important;
+    padding: 28px 20px !important;
+    animation: pulse-border 2.4s ease-in-out infinite !important;
+    background: rgba(201,168,76,0.04) !important;
+}
+section[data-testid="stFileUploaderDropzone"]:hover {
+    animation: none !important;
+    border-color: rgba(201,168,76,0.9) !important;
+    background: rgba(201,168,76,0.07) !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+    _, upload_col, _ = st.columns([1, 2, 1])
+    with upload_col:
+        uploaded = st.file_uploader(
+            "Upload a house photo",
+            type=["jpg", "jpeg", "png"],
+            key=file_uploader_key,
+            label_visibility="collapsed",
+        )
+
+    return uploaded
+
+
 def render_before_after_slider():
     """Render a pure HTML/CSS/JS before-after slider with a gold divider."""
     original = st.session_state.original_image_bytes
@@ -2368,37 +2644,35 @@ def render_before_after_slider():
 
 
 def render_variation_cards():
-    """Display the most recent batch of 3 variations as clickable cards."""
-    ids = st.session_state.get("last_batch_ids", [])
-    if not ids:
-        return
-    variations = [v for v in st.session_state.variations if v["id"] in ids]
-    if not variations:
+    """Display the most recent batch of variations as image columns with Use This buttons."""
+    display = st.session_state.get("_var_display", [])
+    if not display:
         return
 
-    st.markdown("<div class='section-title'>Latest Variations</div>", unsafe_allow_html=True)
-    cols = st.columns(len(variations))
-    for col, var in zip(cols, variations):
+    st.markdown(
+        "<div style='color:#c9a84c;font-family:\"Playfair Display\",serif;"
+        "font-size:18px;font-weight:700;margin:24px 0 12px;'>Design Variations</div>",
+        unsafe_allow_html=True,
+    )
+    cols = st.columns(3)
+    for col, item in zip(cols, display):
         with col:
-            clicked = card(
-                title=var["name"],
-                text="Use this design",
-                image=img_to_data_uri(var["image_bytes"]),
-                key="vcard_" + var["id"],
-                on_click=lambda: None,
-                styles={
-                    "card": {
-                        "width": "100%", "height": "240px", "border-radius": "14px",
-                        "border": "1px solid #2a2a2a", "margin": "0",
-                        "box-shadow": "0 6px 20px rgba(0,0,0,0.5)",
-                    },
-                    "title": {"color": "#ffffff", "font-family": "Inter", "font-size": "15px"},
-                    "text": {"color": "#c9a84c", "font-family": "Inter", "font-size": "12px"},
-                    "filter": {"background-color": "rgba(0,0,0,0.45)"},
-                },
+            st.markdown(
+                f"<div style='color:#ffffff;font-weight:600;font-size:14px;"
+                f"margin-bottom:6px;text-align:center;'>{item['label']}</div>",
+                unsafe_allow_html=True,
             )
-            if clicked and st.session_state.current_image_bytes != var["image_bytes"]:
-                st.session_state.current_image_bytes = var["image_bytes"]
+            st.image(item["image_bytes"], use_container_width=True)
+            st.markdown(
+                f"<div style='color:#aaaaaa;font-size:11px;text-align:center;"
+                f"margin-bottom:6px;'>{item['name']}</div>",
+                unsafe_allow_html=True,
+            )
+            if st.button("Use This", key=f"use_var_{item['image_bytes_key']}",
+                         use_container_width=True):
+                st.session_state.current_image_bytes = item["image_bytes"]
+                st.session_state["_var_display"] = []
+                st.session_state.last_batch_ids = []
                 st.rerun()
 
 
@@ -2655,9 +2929,26 @@ def main():
     init_state()
     apply_pending_preset()
 
+    # ---- Hero landing (shown only before an image is uploaded) ------------ #
+    if not st.session_state.original_image_bytes:
+        hero_upload = render_hero_landing()
+        if hero_upload is not None:
+            data = hero_upload.getvalue()
+            signature = (hero_upload.name, len(data))
+            if st.session_state.uploaded_sig != signature:
+                st.session_state.original_image_bytes = data
+                st.session_state.current_image_bytes = data
+                st.session_state.edit_history = []
+                st.session_state.custom_instructions = []
+                st.session_state.uploaded_sig = signature
+                st.session_state.last_batch_ids = []
+                st.session_state["_var_display"] = []
+                st.rerun()
+        return
+
     render_header()
 
-    # ---- Image upload ---------------------------------------------------- #
+    # ---- Image upload (shown only after a photo is already loaded) ------- #
     uploaded = st.file_uploader("Upload a house photo", type=["jpg", "jpeg", "png"])
     if uploaded is not None:
         data = uploaded.getvalue()
@@ -2669,11 +2960,8 @@ def main():
             st.session_state.custom_instructions = []
             st.session_state.uploaded_sig = signature
             st.session_state.last_batch_ids = []
+            st.session_state["_var_display"] = []
             st.success("Photo loaded. Use the sidebar to design.")
-
-    if not st.session_state.current_image_bytes:
-        st.info("Upload a photo of the home's exterior to begin.")
-        return
 
     # ---- Image + toolbar ------------------------------------------------- #
     # The placeholder is created here — before render_sidebar() — so that
@@ -2681,7 +2969,7 @@ def main():
     # spinner into it immediately, before the blocking edit_image() call.
     # The frame CSS is scoped to .st-key-hero_image_row to avoid leaking the
     # gold border/radius onto every first-column element in the sidebar.
-    global _image_placeholder
+    global _image_placeholder, _var_placeholder
     with st.container(key="hero_image_row"):
         st.markdown("""
 <style>
@@ -2711,10 +2999,17 @@ def main():
         with tb_col:
             render_icon_toolbar()
 
-    # Sidebar rendered AFTER the placeholder so run_generate() can reach it.
+    # Variations placeholder — created before render_sidebar() so that
+    # _run_generate_variations() can write its progress bar here from the sidebar.
+    _var_placeholder = st.empty()
+
+    # Sidebar rendered AFTER the placeholders so sidebar callbacks can reach them.
     # Sidebar content always renders in the left panel regardless of call order.
     render_sidebar()
     render_sidebar_float_btn()
+
+    # Render any variation cards stored from the last "Generate 3 Variations" run.
+    render_variation_cards()
 
     # ---- Before/After toggle (only if a generation has happened) ----------- #
     _orig = st.session_state.original_image_bytes
