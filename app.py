@@ -2603,12 +2603,12 @@ def render_before_after_slider():
       <div id="ba-divider" style="position:absolute;top:0;left:50%;width:3px;
            height:{height}px;background:#c9a84c;cursor:ew-resize;
            box-shadow:0 0 10px rgba(201,168,76,0.8);"></div>
-      <div style="position:absolute;top:12px;left:12px;background:rgba(0,0,0,0.6);
-           color:#fff;padding:4px 12px;border-radius:6px;font-family:Inter,sans-serif;
-           font-size:12px;letter-spacing:1px;">BEFORE</div>
-      <div style="position:absolute;top:12px;right:12px;background:rgba(201,168,76,0.85);
+      <div style="position:absolute;top:12px;left:12px;background:rgba(201,168,76,0.85);
            color:#0f0f0f;padding:4px 12px;border-radius:6px;font-family:Inter,sans-serif;
            font-size:12px;letter-spacing:1px;font-weight:600;">AFTER</div>
+      <div style="position:absolute;top:12px;right:12px;background:rgba(0,0,0,0.6);
+           color:#fff;padding:4px 12px;border-radius:6px;font-family:Inter,sans-serif;
+           font-size:12px;letter-spacing:1px;">BEFORE</div>
     </div>
     </div>
     <script>
