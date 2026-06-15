@@ -2465,13 +2465,13 @@ def render_hero_landing(file_uploader_key="hero_upload"):
     <div id="hero-divider" style="position:absolute;top:0;left:50%;width:3px;
          height:{height}px;background:#c9a84c;cursor:ew-resize;
          box-shadow:0 0 12px rgba(201,168,76,0.9);transform:translateX(-50%);"></div>
-    <div style="position:absolute;top:12px;left:14px;background:rgba(0,0,0,0.65);
-         color:#fff;padding:3px 10px;border-radius:6px;
-         font-family:Inter,sans-serif;font-size:11px;letter-spacing:1px;">BEFORE</div>
-    <div style="position:absolute;top:12px;right:14px;background:rgba(201,168,76,0.90);
+    <div style="position:absolute;top:12px;left:14px;background:rgba(201,168,76,0.90);
          color:#0f0f0f;padding:3px 10px;border-radius:6px;
          font-family:Inter,sans-serif;font-size:11px;letter-spacing:1px;
          font-weight:700;">AFTER</div>
+    <div style="position:absolute;top:12px;right:14px;background:rgba(0,0,0,0.65);
+         color:#fff;padding:3px 10px;border-radius:6px;
+         font-family:Inter,sans-serif;font-size:11px;letter-spacing:1px;">BEFORE</div>
   </div>
   <div style="text-align:center;color:#c9a84c;font-size:12px;
               font-family:Inter,sans-serif;margin-top:8px;margin-bottom:2px;">
